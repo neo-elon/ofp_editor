@@ -2,34 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const lib=require('pdf-lib');
-const pdfjs=require('pdfjs-dist/build/pdf.js');
-const safety=require('../pdf-safety.js');
-const {createCanvas,DOMMatrix,Path2D}=require('@napi-rs/canvas');
-globalThis.DOMMatrix=DOMMatrix;globalThis.Path2D=Path2D;
-class CanvasFactory{
- create(width,height){const canvas=createCanvas(width,height);return {canvas,context:canvas.getContext('2d')}}
- reset(target,width,height){target.canvas.width=width;target.canvas.height=height}
- destroy(target){target.canvas.width=0;target.canvas.height=0}
-}
-// Browser worker/assets use CDN URLs; Node uses the same pinned files installed locally.
-const browserPdfjs={GlobalWorkerOptions:{},getDocument(options){
- assert.equal(options.isEvalSupported,false);
- return pdfjs.getDocument({...options,CanvasFactory,cMapUrl:path.join(__dirname,'../node_modules/pdfjs-dist/cmaps/'),standardFontDataUrl:path.join(__dirname,'../node_modules/pdfjs-dist/standard_fonts/')});
-}};
-const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
-const script=html.match(/<script>\s*([\s\S]*?)<\/script>/)[1];
-
-// Execute the exact shipped inline app with a minimal DOM and capture the download.
-function app(pdfjsLib=browserPdfjs,safetyLib=safety){
- const elements={};let blob,download;
- const element=()=>({style:{},classList:{add(){},remove(){}},click(){},remove(){}});
- const document={getElementById(id){return elements[id]??=element()},body:{appendChild(){}},createElement(tag){if(tag==='canvas')return createCanvas(1,1);const a=element();a.click=()=>{download=a.download};return a}};
- const URL={createObjectURL(b){blob=b;return 'blob:test'},revokeObjectURL(){}};
- const exports='return {readOutline,readLines,mapPages,findCFP,validPage,parseCFP,parseATS,compare,drawRoute,addBookmarks,run};';
- const api=new Function('document','window','URL','setTimeout',script.replace(/\}\)\(\);\s*$/,exports+'})();').replace('(function(){','return (function(){'))(document,{pdfjsLib,PDFLib:lib,OFPSafety:safetyLib},URL,()=>{});
- return {api,elements,document,get blob(){return blob},get download(){return download}};
-}
+const {app,browserPdfjs,inspect,normalize,lib,safety}=require('./app-harness.cjs');
 const cfpLines=['CFP PLAN 1234','FLIGHT RELEASE KAL123 RKSI/RJAA ON 15/NOV/26','DISC 42','ETD RKSI 0100Z ETA RJAA 0300Z','2ND-$','RKSI DCT ABC A1 DEF DCT RJAA','DIST LATITUDE'];
 const atsLines=['(FPL-KAL123-IS','-N0450F350 ABC A1 DEF','-RJAA0200'];
 
@@ -62,10 +35,7 @@ async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7
  return new Uint8Array(Buffer.concat([Buffer.from(saved),object,Buffer.from(tail)]));
 }
 function file(bytes){return {name:'input.pdf',type:'application/pdf',arrayBuffer:async()=>Uint8Array.from(bytes).buffer}}
-async function inspect(bytes,fn){
- const task=browserPdfjs.getDocument({data:Uint8Array.from(bytes),isEvalSupported:false});
- try{return await fn(await task.promise)}finally{await task.destroy()}
-}
+
 
 test('outline handles zero, named/ref destinations, invalid indices and broken outline',async()=>{
  const {api}=app();const resolved=[];
@@ -84,6 +54,15 @@ test('CFP discovery ignores stale and wrong-page bookmarks, including first page
  assert.equal(api.findCFP({0:cfpLines,1:['cover']},58).page,0);
  assert.equal(api.findCFP({0:cfpLines,1:['cover']},1).page,0);
  assert.throws(()=>api.findCFP({0:['unreadable text']},0),/텍스트 추출/);
+});
+
+test('ATS discovery distinguishes standalone submitted copy from CFP and FlightInfo repeats',()=>{
+ const {api}=app(),cfp=api.parseCFP(cfpLines);
+ const texts={5:['CFP continuation',...atsLines],8:atsLines,58:['FlightInfo continuation',...atsLines]};
+ assert.equal(api.findATS(texts,cfp,53),8);
+ assert.equal(api.findATS({5:atsLines},cfp),5);
+ assert.throws(()=>api.findATS({5:atsLines,8:atsLines},cfp),/候補|후보/);
+ assert.throws(()=>api.findATS({5:atsLines.map(t=>t.replace('KAL123','KAL999'))},cfp),/찾지 못/);
 });
 
 test('page identity mapping handles different parser order; rejects missing/duplicate pages',async()=>{
@@ -106,6 +85,22 @@ test('route comparison, Checked position and mismatch red underline remain intac
  const bad=api.compare(cfp.route,ats.replace('DEF','XYZ'),cfp.origin,cfp.dest);assert.equal(bad.match,false);
  api.drawRoute(page,cfp.route,bad,font,lib);assert.ok(lines.length>0);assert.equal(lines[0].color.red,.85);
  assert.ok(!texts.some(t=>t.s==='(Checked)'));
+});
+
+test('drawing metrics use unkerned PDF advances and preserve an existing route annotation',async()=>{
+ const source=await lib.PDFDocument.create();source.addPage([595,842]);
+ const bytes=await source.save({useObjectStreams:false}),doc=await lib.PDFDocument.load(bytes),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ const text='AVATAR VA WAVE '.repeat(4).trim(),width=safety.textWidth(font,text,10),edits=[];
+ assert.ok(width>font.widthOfTextAtSize(text,10)+2);
+ safety.recordPage(doc.getPage(0),0,edits,[0,0,595,842]).drawText(text,{x:25,y:825,size:10,font,color:lib.rgb(0,0,1)});
+ await inspect(bytes,async before=>inspect(await doc.save({useObjectStreams:false}),async after=>{
+  const items=(await(await after.getPage(1)).getTextContent()).items;assert.ok(Math.abs(items.find(t=>t.str===text).width-width)<.01);
+  await safety.verify(before,after,{document:app().document,edits});
+ }));
+ const {api}=app(),route=cfpLines[5],annotations=[{subtype:'FreeText',contentsObj:{str:route},rect:[160,792,585,815]}];
+ assert.equal(api.routeLayout(annotations,route,{match:true},font,595,842).size,9);
+ assert.equal(api.routeLayout([],route,{match:true},font,595,842).size,10);
+ assert.throws(()=>api.routeLayout([{...annotations[0],rect:[160,792,585,840]}],route,{match:true},font,595,842),/여백이 부족/);
 });
 
 test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotations/bookmarks/filename',async()=>{
@@ -151,11 +146,7 @@ test('concurrent drops cannot start a second PDF job',async()=>{
  assert.ok(ui.blob,ui.elements.status.textContent);
 });
 
-async function normalize(bytes){
- const createQpdf=require('../vendor/qpdf/qpdf.js');
- const qpdf=await createQpdf({noInitialRun:true,locateFile:()=>path.join(__dirname,'../vendor/qpdf/qpdf.wasm')});
- return safety.normalizeWithModule(qpdf,bytes);
-}
+
 
 test('61 vs 7 reproduced: inactive object stream overwrites pdf-lib tree; QPDF preserves active xref',async()=>{
  const bytes=await fixture({pages:61,atsIndex:58,staleObjectStream:true});

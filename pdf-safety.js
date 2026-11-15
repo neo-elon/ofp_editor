@@ -38,6 +38,8 @@ function normalize(input){
 function geometry(page){return JSON.stringify([page.view,page.rotate,page.userUnit])}
 function textKey(item){return JSON.stringify([item.str,item.dir,item.transform.map(n=>Math.round(n*10000)/10000),Math.round(item.width*10000)/10000,Math.round(item.height*10000)/10000])}
 function inside(x,y,rects){return rects.some(r=>x>=r[0]&&x<=r[2]&&y>=r[1]&&y<=r[3])}
+// pdf-lib drawText emits unkerned Tj text; whole-string metrics include kerning.
+function textWidth(font,text,size){return Array.from(text).reduce((width,char)=>width+font.widthOfTextAtSize(char,size),0)}
 async function raster(page,document){
  const viewport=page.getViewport({scale:1});
  if(!Number.isFinite(viewport.width)||!Number.isFinite(viewport.height)||viewport.width*viewport.height>3000000)fail('검증 가능한 페이지 크기를 초과했습니다. 다운로드하지 않습니다.');
@@ -68,7 +70,7 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
    const pixel=offset/4,masked=inside(pixel%x.width,Math.floor(pixel/x.width),masks);
    if(masked&&(x.data[offset]!==255||x.data[offset+1]!==255||x.data[offset+2]!==255))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다. 겹쳐 쓰지 않고 다운로드를 중단합니다.');
    if(x.data[offset]===y.data[offset]&&x.data[offset+1]===y.data[offset+1]&&x.data[offset+2]===y.data[offset+2]&&x.data[offset+3]===y.data[offset+3])continue;
-   if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다. 다운로드하지 않습니다.');
+   if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');
   }
   a.cleanup();b.cleanup();progress(index+1,before.numPages);
  }
@@ -81,9 +83,9 @@ function recordPage(page,index,edits,view){
   edits.push({page:index,...mark});
  };
  return {getHeight:()=>page.getHeight(),getWidth:()=>page.getWidth(),drawText(text,opts){
-  const width=opts.font.widthOfTextAtSize(text,opts.size);add({text,x:opts.x,y:opts.y,rect:[opts.x-2,opts.y-opts.size*.3-2,opts.x+width+2,opts.y+opts.size+2]});page.drawText(text,opts);
+  const width=textWidth(opts.font,text,opts.size);add({text,x:opts.x,y:opts.y,rect:[opts.x-2,opts.y-opts.size*.3-2,opts.x+width+2,opts.y+opts.size+2]});page.drawText(text,opts);
  },drawLine(opts){const {start:a,end:b}=opts;add({rect:[Math.min(a.x,b.x)-2,Math.min(a.y,b.y)-2,Math.max(a.x,b.x)+2,Math.max(a.y,b.y)+2]});page.drawLine(opts)}};
 }
-const api={diagnose,normalizeWithModule,normalize,verify,recordPage};
+const api={diagnose,normalizeWithModule,normalize,verify,recordPage,textWidth};
 if(typeof module==='object'&&module.exports)module.exports=api;else root.OFPSafety=api;
 })(globalThis);

@@ -1,2 +1,4 @@
 node_modules/
 *.pdf
+tmp/pdfs/
+output/pdf/
