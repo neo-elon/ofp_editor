@@ -37,9 +37,13 @@ function normalize(input){
 }
 function geometry(page){return JSON.stringify([page.view,page.rotate,page.userUnit])}
 function textKey(item){return JSON.stringify([item.str,item.dir,item.transform.map(n=>Math.round(n*10000)/10000),Math.round(item.width*10000)/10000,Math.round(item.height*10000)/10000])}
-function inside(x,y,rects){return rects.some(r=>x>=r[0]&&x<=r[2]&&y>=r[1]&&y<=r[3])}
 // pdf-lib drawText emits unkerned Tj text; whole-string metrics include kerning.
-function textWidth(font,text,size){return Array.from(text).reduce((width,char)=>width+font.widthOfTextAtSize(char,size),0)}
+const fontWidths=new WeakMap();
+function textWidth(font,text,size){
+ let sizes=fontWidths.get(font);if(!sizes){sizes=new Map();fontWidths.set(font,sizes)}
+ let chars=sizes.get(size);if(!chars){chars=new Map();sizes.set(size,chars)}
+ let width=0;for(const char of text){if(!chars.has(char))chars.set(char,font.widthOfTextAtSize(char,size));width+=chars.get(char)}return width;
+}
 async function raster(page,document){
  const viewport=page.getViewport({scale:1});
  if(!Number.isFinite(viewport.width)||!Number.isFinite(viewport.height)||viewport.width*viewport.height>3000000)fail('검증 가능한 페이지 크기를 초과했습니다. 다운로드하지 않습니다.');
@@ -63,8 +67,9 @@ async function whitespace(page,document){
 }
 async function verify(before,after,{document,edits=[],progress=()=>{}}){
  if(before.numPages!==after.numPages)fail('검증 실패: 원본 '+before.numPages+' / 결과 '+after.numPages+'페이지. 다운로드하지 않습니다.');
+ const editsByPage=new Map();for(const edit of edits){if(!editsByPage.has(edit.page))editsByPage.set(edit.page,[]);editsByPage.get(edit.page).push(edit)}
  for(let index=0;index<before.numPages;index++){
-  const a=await before.getPage(index+1),b=await after.getPage(index+1),marks=edits.filter(e=>e.page===index);
+  const a=await before.getPage(index+1),b=await after.getPage(index+1),marks=editsByPage.get(index)||[];
   if(geometry(a)!==geometry(b))fail('검증 실패: '+(index+1)+'페이지 크기/회전/순서가 다릅니다.');
   const oldText=(await a.getTextContent()).items.filter(t=>typeof t.str==='string').map(textKey);
   const newItems=(await b.getTextContent()).items.filter(t=>typeof t.str==='string');
@@ -78,8 +83,14 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
   const x=first.pixels,y=second.pixels;
   if(x.width!==y.width||x.height!==y.height)fail('검증 실패: 페이지 렌더링 크기가 다릅니다.');
   const masks=marks.map(m=>{const r=first.viewport.convertToViewportRectangle(m.rect);return [Math.floor(Math.min(r[0],r[2])),Math.floor(Math.min(r[1],r[3])),Math.ceil(Math.max(r[0],r[2])),Math.ceil(Math.max(r[1],r[3]))]});
+  // Union rectangles once instead of searching every rectangle at every pixel.
+  const mask=masks.length?new Uint8Array(x.width*x.height):null;
+  for(const [left,top,right,bottom] of masks)for(let row=Math.max(0,top);row<=Math.min(x.height-1,bottom);row++){
+   const start=Math.max(0,left),end=Math.min(x.width-1,right);
+   if(start<=end)mask.fill(1,row*x.width+start,row*x.width+end+1);
+  }
   for(let offset=0;offset<x.data.length;offset+=4){
-   const pixel=offset/4,masked=inside(pixel%x.width,Math.floor(pixel/x.width),masks);
+   const pixel=offset/4,masked=mask&&mask[pixel];
    if(masked&&(x.data[offset]!==255||x.data[offset+1]!==255||x.data[offset+2]!==255))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다. 겹쳐 쓰지 않고 다운로드를 중단합니다.');
    if(x.data[offset]===y.data[offset]&&x.data[offset+1]===y.data[offset+1]&&x.data[offset+2]===y.data[offset+2]&&x.data[offset+3]===y.data[offset+3])continue;
    if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');

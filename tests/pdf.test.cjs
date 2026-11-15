@@ -135,6 +135,13 @@ test('route comparison, Checked position and mismatch red underline remain intac
  assert.ok(!texts.some(t=>t.s==='(Checked)'));
 });
 
+test('repeated mismatch tokens underline each occurrence once',()=>{
+ const {api}=app(),lines=[],font={widthOfTextAtSize:s=>s.length*5};
+ const page={getHeight:()=>842,getWidth:()=>595,drawText(){},drawLine:line=>lines.push(line)};
+ api.drawRoute(page,'RKSI ABC ABC RJAA',{match:false,bad:['ABC','ABC','ABC']},font,lib);
+ assert.equal(lines.length,2);assert.notEqual(lines[0].start.x,lines[1].start.x);
+});
+
 test('drawing metrics use unkerned PDF advances and preserve an existing route annotation',async()=>{
  const source=await lib.PDFDocument.create();source.addPage([595,842]);
  const bytes=await source.save({useObjectStreams:false}),doc=await lib.PDFDocument.load(bytes),font=await doc.embedFont(lib.StandardFonts.Helvetica);
@@ -327,6 +334,20 @@ test('verification blocks drawing over original content and wrong annotation loc
   edits[0].x=200;
   await assert.rejects(safety.verify(before,after,{document,edits}),/표시 위치가 다릅니다/);
  }));
+});
+
+test('verification keeps the gap between separate allowed edit regions protected',async()=>{
+ const source=await lib.PDFDocument.create();source.addPage([595,842]);
+ const bytes=await source.save(),doc=await lib.PDFDocument.load(bytes),font=await doc.embedFont(lib.StandardFonts.Helvetica),edits=[],document=app().document;
+ const page=safety.recordPage(doc.getPage(0),0,edits,[0,0,595,842]);
+ page.drawText('LEFT',{x:30,y:800,size:10,font});page.drawText('RIGHT',{x:300,y:800,size:10,font});
+ const valid=await doc.save();
+ await inspect(bytes,async before=>{
+  await inspect(valid,async after=>{await safety.verify(before,after,{document,edits})});
+  const changed=await lib.PDFDocument.load(valid);
+  changed.getPage(0).drawRectangle({x:160,y:800,width:10,height:5,color:lib.rgb(1,0,0)});
+  await inspect(await changed.save(),async after=>{await assert.rejects(safety.verify(before,after,{document,edits}),/표시 영역 밖/)});
+ });
 });
 
 test('QPDF warnings are blocking and vendored binaries match the pinned package',()=>{
