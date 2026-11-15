@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#142a45"/>
+  <path d="M166 108h132l60 60v218a22 22 0 0 1-22 22H166a22 22 0 0 1-22-22V130a22 22 0 0 1 22-22Z" fill="#f8fbff"/>
+  <path d="M298 108v44a16 16 0 0 0 16 16h44Z" fill="#76b9ff"/>
+  <text x="251" y="248" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="60" font-weight="700" fill="#142a45">OFP</text>
+  <path d="M178 275h144M178 294h88" fill="none" stroke="#b4c8dd" stroke-width="9" stroke-linecap="round"/>
+  <g transform="translate(253 350) rotate(-25)">
+    <path d="M-62 11h48L-3-26h14L9 11h34q17 0 17 9T43 29H9l2 26H-3l-11-26h-48l-9-9Z" fill="#1764c3"/>
+  </g>
+</svg>
