@@ -25,7 +25,7 @@ function app(pdfjsLib=browserPdfjs,safetyLib=safety){
  const element=()=>({style:{},classList:{add(){},remove(){}},click(){},remove(){}});
  const document={getElementById(id){return elements[id]??=element()},body:{appendChild(){}},createElement(tag){if(tag==='canvas')return createCanvas(1,1);const a=element();a.click=()=>{download=a.download};return a}};
  const URL={createObjectURL(b){blob=b;return 'blob:test'},revokeObjectURL(){}};
- const exports='return {readOutline,readLines,mapPages,findCFP,findATS,routeLayout,validPage,parseCFP,parseATS,compare,drawRoute,addBookmarks,run};';
+ const exports='return {readOutline,readLines,mapPages,findCFP,findATS,routeLayout,discLayout,validPage,parseCFP,parseATS,compare,drawRoute,addBookmarks,run};';
  const api=new Function('document','window','URL','setTimeout',script.replace(/\}\)\(\);\s*$/,exports+'})();').replace('(function(){','return (function(){'))(document,{pdfjsLib,PDFLib:lib,OFPSafety:safetyLib},URL,()=>{});
  return {api,elements,document,get blob(){return blob},get download(){return download}};
 }
