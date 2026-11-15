@@ -17,6 +17,7 @@ async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7
  if(longRoute)doc.getPage(atsIndex).drawText('ORIGINAL BLACK HEADER',{x:25,y:775,size:10,font});
  if(blockedMargin)doc.getPage(atsIndex).drawRectangle({x:0,y:772,width:595,height:70,color:lib.rgb(0,0,0)});
  write(2,['WEATHER BRIEFING']);write(1,['w i n t e m 1']);write(4,['c r o s s']);write(5,['KOREAN AIR NOTAM PACKAGE 1']);
+ if(!lastATS&&atsIndex+2<pages)doc.getPage(atsIndex+2).drawText('- DISC FUEL DUE TO WEATHER',{x:45,y:180,size:10,font});
  // A seven-page PDF carrying a leftover destination for page index 58.
  const ctx=doc.context,N=lib.PDFName,root=ctx.obj({Type:'Outlines',Count:2}),rootRef=ctx.register(root);
  const first=ctx.obj({Title:lib.PDFHexString.fromText('FlightPlan'),Parent:rootRef,Dest:[58,N.of('Fit')]}),firstRef=ctx.register(first);
@@ -81,6 +82,17 @@ test('CFP discovery ignores stale and wrong-page bookmarks, including first page
  assert.equal(api.findCFP({0:cfpLines,1:['cover']},58).page,0);
  assert.equal(api.findCFP({0:cfpLines,1:['cover']},1).page,0);
  assert.throws(()=>api.findCFP({0:['unreadable text']},0),/텍스트 추출/);
+});
+
+test('DISC follows the complete matching row, including split text items and trailing reason',async()=>{
+ const {api}=app(),doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ const item=(str,x,y,width)=>({str,width,transform:[10,0,0,10,x,y]});
+ const items=[item('WEATHER',160,310,60),item('OTHER ROW',400,280,80),item('DISC',40,310,25),item('FUEL DUE TO',70,310,80)];
+ const page={view:[0,0,595,842],getTextContent:async()=>({items})};
+ const layout=await api.discLayout(page,'DISC 42',font);
+ assert.equal(layout.x,230);assert.equal(layout.y,310);assert.equal(layout.size,10);
+ await assert.rejects(api.discLayout({...page,getTextContent:async()=>({items:[]})},'DISC 42',font),/확정하지 못/);
+ await assert.rejects(api.discLayout({...page,view:[0,0,240,842]},'DISC 42',font),/여백이 부족/);
 });
 
 test('ATS discovery distinguishes standalone submitted copy from CFP and FlightInfo repeats',()=>{
@@ -200,6 +212,10 @@ test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotat
   assert.equal(read.numPages,7);
   const text=async i=>(await read.getPage(i+1)).getTextContent().then(c=>c.items.map(t=>t.str).join(' '));
   assert.match(await text(3),/RJAA\s*\(Checked\)/);assert.match(await text(5),/DISC 42/);
+  const discItems=(await(await read.getPage(6)).getTextContent()).items;
+  const label=discItems.find(t=>t.str==='- DISC FUEL DUE TO WEATHER'),disc=discItems.find(t=>t.str==='DISC 42');
+  assert.equal(disc.transform[5],label.transform[5]);
+  assert.ok(Math.abs(disc.transform[4]-(label.transform[4]+label.width+10))<.01);
   assert.match(await text(2),/ETD RKSI 0100Z ETA RJAA 0300Z/);
   const outline=await ui.api.readOutline(read);
   for(const [title,index] of Object.entries({FlightPlan:0,'ATS FLIGHT PLAN':3,Header:4,'Weather Briefing':2,'Weather Charts':1,'Cross Chart':4,'Notam 1':5,OceanicTracks:6}))assert.equal(outline[title],index,title);

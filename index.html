@@ -97,6 +97,19 @@ function wrap(route,font,size,max,checked){
  return lines;
 }
 function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,size)}
+async function discLayout(page,text,font){
+ const rows=[];
+ for(const item of (await page.getTextContent()).items){
+  if(!item.str?.trim())continue;
+  const y=item.transform[5];let row=rows.find(r=>Math.abs(r.y-y)<2.3);
+  if(!row){row={y,items:[]};rows.push(row)}row.items.push(item);
+ }
+ const matches=rows.filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.items.sort((a,b)=>a.transform[4]-b.transform[4]).map(t=>t.str).join(' ')));
+ if(matches.length!==1)abort('DISC FUEL DUE TO 문구가 있는 줄을 확정하지 못했습니다. 임의 위치에 DISC를 표시하지 않습니다.');
+ const row=matches[0],x=Math.max(...row.items.map(t=>t.transform[4]+t.width))+10;
+ for(let size=10;size>=6;size-=.5)if(x+textWidth(font,text,size)+2<=page.view[2])return {x,y:row.y,size};
+ abort('DISC FUEL DUE TO 줄 오른쪽에 DISC 값을 표시할 여백이 부족합니다.');
+}
 function routeLayout(annotations,route,result,font,width,height,isClear=()=>true){
  const existing=annotations.filter(a=>a.subtype==='FreeText'&&a.contentsObj?.str.replace(/\s+/g,' ').trim()===route&&a.rect[3]>height-70);
  const candidates=existing.length?[{size:9,top:11.25,leading:10.5}]:[{size:10,top:17,leading:11.5},{size:9,top:11.25,leading:10.5}];
@@ -242,7 +255,13 @@ async function run(file){
   const clearRouteArea=await safety.whitespace(atsSource,document);
   drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3],clearRouteArea));
   if(cfp.disc&&validPage(atsPage+2,read.numPages)){
-   const p=await editable(atsPage+2);p.drawText('DISC '+cfp.disc,{x:370,y:p.getHeight()-707,size:10,font,color:lib.rgb(...BLUE)});
+   const candidates=Object.keys(texts).map(Number).filter(i=>texts[i].some(line=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(line)));
+   const discPage=candidates.includes(atsPage+2)?atsPage+2:candidates.length===1?candidates[0]:undefined;
+   if(discPage===undefined)abort('DISC FUEL DUE TO 문구가 있는 페이지를 확정하지 못했습니다.');
+   const source=await read.getPage(discPage+1),text='DISC '+cfp.disc,position=await discLayout(source,text,font);
+   const clear=await safety.whitespace(source,document),{x,y,size}=position;
+   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))abort('DISC 표시 위치에 기존 내용이 있어 처리를 중단했습니다.');
+   (await editable(discPage)).drawText(text,{...position,font,color:lib.rgb(...BLUE)});
   }
   if(cfp.times&&sections['Weather Briefing']!==undefined){
    const p=await editable(sections['Weather Briefing']),t='ETD '+cfp.times[1]+' '+cfp.times[2]+'Z ETA '+cfp.times[3]+' '+cfp.times[4]+'Z';
