@@ -100,6 +100,8 @@ function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,s
 function routeLayout(annotations,route,result,font,width,height,isClear=()=>true){
  const existing=annotations.filter(a=>a.subtype==='FreeText'&&a.contentsObj?.str.replace(/\s+/g,' ').trim()===route&&a.rect[3]>height-70);
  const candidates=existing.length?[{size:9,top:11.25,leading:10.5}]:[{size:10,top:17,leading:11.5},{size:9,top:11.25,leading:10.5}];
+ // Prefer the largest safe text; progressively reduce both type size and leading.
+ for(let size=8.5;size>=1;size-=.5)candidates.push({size,top:size+2.25,leading:size+1.5});
  for(const candidate of candidates){
   const {size,leading}=candidate,lines=wrap(route,font,size,width-50,result.match);
   if(lines.length>4)continue;
@@ -114,7 +116,7 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
     const y=height-top-leading*i,checked=result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0;
     const rect=[23,y-size*.3-2,27+textWidth(font,line,size)+checked,y+size+2];
     const overlapsExisting=existing.some(a=>rect[0]<=a.rect[2]&&rect[2]>=a.rect[0]&&rect[1]<=a.rect[3]&&rect[3]>=a.rect[1]);
-    return !overlapsExisting&&isClear(rect);
+    return rect[2]<=width-23&&!overlapsExisting&&isClear(rect);
    }))return {size,top,leading};
   }
  }
