@@ -97,17 +97,29 @@ function wrap(route,font,size,max,checked){
  return lines;
 }
 function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,size)}
-function routeLayout(annotations,route,result,font,width,height){
+function routeLayout(annotations,route,result,font,width,height,isClear=()=>true){
  const existing=annotations.filter(a=>a.subtype==='FreeText'&&a.contentsObj?.str.replace(/\s+/g,' ').trim()===route&&a.rect[3]>height-70);
- if(!existing.length)return {size:10,top:17,leading:11.5};
- const layout={size:9,top:11.25,leading:10.5},lines=wrap(route,font,layout.size,width-50,result.match);
- const bottom=height-layout.top-layout.leading*(lines.length-1)-layout.size*.3-2;
- if(bottom<Math.max(...existing.map(a=>a.rect[3])))abort('기존 Route 주석을 보존하며 표시할 여백이 부족합니다.');
- return layout;
+ const candidates=existing.length?[{size:9,top:11.25,leading:10.5}]:[{size:10,top:17,leading:11.5},{size:9,top:11.25,leading:10.5}];
+ for(const candidate of candidates){
+  const {size,leading}=candidate,lines=wrap(route,font,size,width-50,result.match);
+  if(lines.length>4)continue;
+  // Search only the top 70pt margin; include padding used by download verification.
+  const floor=Math.max(height-70,...existing.map(a=>a.rect[3]));
+  const maxTop=height-floor-leading*(lines.length-1)-size*.3-2;
+  const tops=[candidate.top];for(let top=size+2.25;top<=maxTop;top++)tops.push(top);
+  for(const top of tops){
+   if(top>maxTop)continue;
+   if(lines.every((line,i)=>{
+    const y=height-top-leading*i,checked=result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0;
+    return isClear([23,y-size*.3-2,27+textWidth(font,line,size)+checked,y+size+2]);
+   }))return {size,top,leading};
+  }
+ }
+ abort('CFP Route를 상단 4줄에 배치할 여백이 부족합니다. 기존 텍스트와 주석을 가리지 않도록 처리를 중단했습니다.');
 }
 function drawRoute(page,route,result,font,lib,layout={size:10,top:17,leading:11.5}){
  const h=page.getHeight(),{size,top,leading}=layout,lines=wrap(route,font,size,page.getWidth()-50,result.match);
- if(lines.length>3)abort('CFP Route가 상단 3줄에 들어가지 않아 처리를 중단했습니다.');
+ if(lines.length>4)abort('CFP Route가 상단 4줄에 들어가지 않아 처리를 중단했습니다.');
  for(let i=0;i<lines.length;i++){
   const s=lines[i],y=h-top-leading*i;page.drawText(s,{x:25,y,size,font,color:lib.rgb(...BLUE)});
   if(!result.match)for(const token of result.bad){
@@ -221,7 +233,8 @@ async function run(file){
   const font=await doc.embedFont(lib.StandardFonts.Helvetica),edits=[];
   async function editable(index){const source=await read.getPage(index+1);return safety.recordPage(doc.getPage(pageMap[index]),index,edits,source.view)}
   const atsSource=await read.getPage(atsPage+1),atsAnnotations=await atsSource.getAnnotations();
-  drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3]));
+  const clearRouteArea=await safety.whitespace(atsSource,document);
+  drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3],clearRouteArea));
   if(cfp.disc&&validPage(atsPage+2,read.numPages)){
    const p=await editable(atsPage+2);p.drawText('DISC '+cfp.disc,{x:370,y:p.getHeight()-707,size:10,font,color:lib.rgb(...BLUE)});
   }
