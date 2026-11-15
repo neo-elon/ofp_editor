@@ -208,7 +208,7 @@ async function run(file){
     if(/WEATHER\s+BRIEFING/i.test(t)&&sections['Weather Briefing']===undefined)sections['Weather Briefing']=i;
     if(/w\s*i\s*n\s*t\s*e\s*m\s*1/i.test(t)&&sections['Weather Charts']===undefined)sections['Weather Charts']=i;
     if(/c\s*r\s*o\s*s\s*s/i.test(t)&&sections['Cross Chart']===undefined)sections['Cross Chart']=i;
-    const n=t.match(/KOREAN\s+AIR\s+NOTAM\s+PACKAGE\s*([123])/i);if(n)sections['Notam '+n[1]]=i;
+    const n=t.match(/KOREAN\s+AIR\s+NOTAM\s+PACKAGE\s*([123])/i);if(n&&sections['Notam '+n[1]]===undefined)sections['Notam '+n[1]]=i;
    });pct(20+Math.round(50*(start+batch.length)/read.numPages));
   }
   const {page:cfpPage,cfp}=findCFP(texts,outline.FlightPlan);sections.FlightPlan=cfpPage;

@@ -118,6 +118,22 @@ test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotat
  assert.equal(ui.elements.choose.disabled,false);
 });
 
+test('NOTAM bookmarks target the first heading, including repeats across extraction batches',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({pages:14}));
+ const font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ // NOTAM 1 starts on index 5 in fixture(); all three titles repeat later.
+ for(const [index,number] of [[6,2],[7,3],[8,1],[9,2],[10,3],[11,1],[12,2],[13,3]]){
+  doc.getPage(index).drawText('KOREAN AIR NOTAM PACKAGE '+number,{x:30,y:760,size:10,font});
+ }
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  assert.equal(read.numPages,14);
+  const outline=await ui.api.readOutline(read);
+  for(const [number,index] of [[1,5],[2,6],[3,7]])assert.equal(outline['Notam '+number],index);
+ });
+});
+
 test('ATS on final page: no out-of-range Header or DISC and no Checked on mismatch',async()=>{
  const ui=app();await ui.api.run(file(await fixture({mismatch:true,lastATS:true})));
  assert.ok(ui.blob,ui.elements.status.textContent);
