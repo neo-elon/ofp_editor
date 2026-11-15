@@ -350,6 +350,33 @@ test('verification keeps the gap between separate allowed edit regions protected
  });
 });
 
+test('cached original fingerprints avoid re-rendering while changed output still blocks download',async()=>{
+ const doc=await lib.PDFDocument.create();doc.addPage([100,100]);const bytes=await doc.save(),document=app().document;
+ await inspect(bytes,async before=>inspect(bytes,async after=>{
+  let sourceRenders=0,resultRenders=0;
+  const tracked=(read,onRender)=>({numPages:read.numPages,getPage:async n=>new Proxy(await read.getPage(n),{get(target,name){
+   const value=Reflect.get(target,name,target);
+   if(name==='render')return options=>{onRender();return value.call(target,options)};
+   return typeof value==='function'?value.bind(target):value;
+  }})});
+  const source=tracked(before,()=>sourceRenders++),result=tracked(after,()=>resultRenders++);
+  await safety.verify(source,result,{document});await safety.verify(source,result,{document});
+  assert.equal(sourceRenders,1);assert.equal(resultRenders,2);
+  const changed=await lib.PDFDocument.load(bytes);changed.getPage(0).drawRectangle({x:10,y:10,width:10,height:10,color:lib.rgb(1,0,0)});
+  await inspect(await changed.save(),async corrupt=>{await assert.rejects(safety.verify(source,corrupt,{document}),/표시 영역 밖/)});
+ }));
+});
+
+test('verification without Web Crypto retains exact pixel checks',async()=>{
+ const vm=require('node:vm'),context=vm.createContext({});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../pdf-safety.js'),'utf8'),context);
+ const doc=await lib.PDFDocument.create();doc.addPage([100,100]);const bytes=await doc.save(),document=app().document;
+ await inspect(bytes,async before=>inspect(bytes,async after=>{await context.OFPSafety.verify(before,after,{document})}));
+ // Reopen before changing a saved stream so the new drawing is serialized.
+ const changed=await lib.PDFDocument.load(bytes);changed.getPage(0).drawRectangle({x:10,y:10,width:10,height:10,color:lib.rgb(0,0,0)});
+ await inspect(bytes,async before=>inspect(await changed.save(),async after=>{await assert.rejects(context.OFPSafety.verify(before,after,{document}),/표시 영역 밖/)}));
+});
+
 test('QPDF warnings are blocking and vendored binaries match the pinned package',()=>{
  assert.throws(()=>safety.normalizeWithModule({FS:{writeFile(){}},callMain:()=>3},new Uint8Array()),/경고 또는 오류/);
  for(const name of ['qpdf.js','qpdf.wasm'])assert.deepEqual(fs.readFileSync(path.join(__dirname,'../vendor/qpdf',name)),fs.readFileSync(require.resolve('@neslinesli93/qpdf-wasm/dist/'+name)));

@@ -65,13 +65,21 @@ async function whitespace(page,document){
   return true;
  };
 }
+// PDF.js source documents are immutable. Retain compact fingerprints, never all page images.
+const sourceSnapshots=new WeakMap();
+async function pixelDigest(pixels){
+ if(!root.crypto?.subtle)return null;
+ return new Uint8Array(await root.crypto.subtle.digest('SHA-256',pixels.data));
+}
+function sameDigest(a,b){return a.length===b.length&&a.every((value,index)=>value===b[index])}
 async function verify(before,after,{document,edits=[],progress=()=>{}}){
  if(before.numPages!==after.numPages)fail('검증 실패: 원본 '+before.numPages+' / 결과 '+after.numPages+'페이지. 다운로드하지 않습니다.');
+ let snapshots=sourceSnapshots.get(before);if(!snapshots){snapshots=new Map();sourceSnapshots.set(before,snapshots)}
  const editsByPage=new Map();for(const edit of edits){if(!editsByPage.has(edit.page))editsByPage.set(edit.page,[]);editsByPage.get(edit.page).push(edit)}
  for(let index=0;index<before.numPages;index++){
   const a=await before.getPage(index+1),b=await after.getPage(index+1),marks=editsByPage.get(index)||[];
   if(geometry(a)!==geometry(b))fail('검증 실패: '+(index+1)+'페이지 크기/회전/순서가 다릅니다.');
-  const oldText=(await a.getTextContent()).items.filter(t=>typeof t.str==='string').map(textKey);
+  const cached=snapshots.get(index),oldText=cached?.text||(await a.getTextContent()).items.filter(t=>typeof t.str==='string').map(textKey);
   const newItems=(await b.getTextContent()).items.filter(t=>typeof t.str==='string');
   const newText=newItems.map(textKey);let cursor=0;
   for(const item of newText)if(item===oldText[cursor])cursor++;
@@ -79,9 +87,20 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
   for(const mark of marks.filter(m=>m.text)){
    if(!newItems.some(t=>t.str===mark.text&&Math.abs(t.transform[4]-mark.x)<.1&&Math.abs(t.transform[5]-mark.y)<.1))fail('검증 실패: '+(index+1)+'페이지 표시 위치가 다릅니다: '+mark.text);
   }
-  const first=await raster(a,document),second=await raster(b,document);
-  const x=first.pixels,y=second.pixels;
-  if(x.width!==y.width||x.height!==y.height)fail('검증 실패: 페이지 렌더링 크기가 다릅니다.');
+  let first=marks.length||!cached?await raster(a,document):null;
+  const second=await raster(b,document),y=second.pixels;
+  const width=first?first.pixels.width:cached.width,height=first?first.pixels.height:cached.height;
+  if(width!==y.width||height!==y.height)fail('검증 실패: 페이지 렌더링 크기가 다릅니다.');
+  let digest=cached?.digest;
+  if(!marks.length&&digest&&root.crypto?.subtle){
+   if(sameDigest(digest,await pixelDigest(y))){
+    snapshots.set(index,{text:oldText,width,height,digest});
+    a.cleanup();b.cleanup();progress(index+1,before.numPages);continue;
+   }
+  }
+  // Changed pages, hash mismatches and browsers without Web Crypto use exact pixel checks.
+  if(!first)first=await raster(a,document);
+  const x=first.pixels;
   const masks=marks.map(m=>{const r=first.viewport.convertToViewportRectangle(m.rect);return [Math.floor(Math.min(r[0],r[2])),Math.floor(Math.min(r[1],r[3])),Math.ceil(Math.max(r[0],r[2])),Math.ceil(Math.max(r[1],r[3]))]});
   // Union rectangles once instead of searching every rectangle at every pixel.
   const mask=masks.length?new Uint8Array(x.width*x.height):null;
@@ -89,12 +108,14 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
    const start=Math.max(0,left),end=Math.min(x.width-1,right);
    if(start<=end)mask.fill(1,row*x.width+start,row*x.width+end+1);
   }
-  for(let offset=0;offset<x.data.length;offset+=4){
-   const pixel=offset/4,masked=mask&&mask[pixel];
+  const oldPixels=new Uint32Array(x.data.buffer,x.data.byteOffset,x.data.byteLength/4),newPixels=new Uint32Array(y.data.buffer,y.data.byteOffset,y.data.byteLength/4);
+  for(let pixel=0;pixel<oldPixels.length;pixel++){
+   const offset=pixel*4,masked=mask&&mask[pixel];
    if(masked&&(x.data[offset]!==255||x.data[offset+1]!==255||x.data[offset+2]!==255))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다. 겹쳐 쓰지 않고 다운로드를 중단합니다.');
-   if(x.data[offset]===y.data[offset]&&x.data[offset+1]===y.data[offset+1]&&x.data[offset+2]===y.data[offset+2]&&x.data[offset+3]===y.data[offset+3])continue;
+   if(oldPixels[pixel]===newPixels[pixel])continue;
    if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');
   }
+  if(!cached){digest=digest||await pixelDigest(x);if(digest)snapshots.set(index,{text:oldText,width,height,digest})}
   a.cleanup();b.cleanup();progress(index+1,before.numPages);
  }
  return {pages:before.numPages,checkedEdits:edits.length};
