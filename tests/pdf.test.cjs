@@ -6,7 +6,7 @@ const {app,browserPdfjs,inspect,normalize,lib,safety}=require('./app-harness.cjs
 const cfpLines=['CFP PLAN 1234','FLIGHT RELEASE KAL123 RKSI/RJAA ON 15/NOV/26','DISC 42','ETD RKSI 0100Z ETA RJAA 0300Z','2ND-$','RKSI DCT ABC A1 DEF DCT RJAA','DIST LATITUDE'];
 const atsLines=['(FPL-KAL123-IS','-N0450F350 ABC A1 DEF','-RJAA0200'];
 
-async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7,atsIndex=3,staleObjectStream=false,longRoute=false,routeWords=55,blockedMargin=false}={}){
+async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7,atsIndex=3,staleObjectStream=false,longRoute=false,routeWords=55,blockedMargin=false,discPageIndex=atsIndex+2}={}){
  const doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
  for(let i=0;i<pages;i++){const p=doc.addPage([595,842]);p.drawText('ORIGINAL PAGE '+(i+1),{x:30,y:400,size:10,font})}
  const write=(i,lines)=>lines.forEach((s,j)=>doc.getPage(i).drawText(s,{x:30,y:760-j*16,size:10,font}));
@@ -17,7 +17,7 @@ async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7
  if(longRoute)doc.getPage(atsIndex).drawText('ORIGINAL BLACK HEADER',{x:25,y:775,size:10,font});
  if(blockedMargin)doc.getPage(atsIndex).drawRectangle({x:0,y:772,width:595,height:70,color:lib.rgb(0,0,0)});
  write(2,['WEATHER BRIEFING']);write(1,['w i n t e m 1']);write(4,['c r o s s']);write(5,['KOREAN AIR NOTAM PACKAGE 1']);
- if(!lastATS&&atsIndex+2<pages)doc.getPage(atsIndex+2).drawText('- DISC FUEL DUE TO WEATHER',{x:45,y:180,size:10,font});
+ if(!lastATS&&discPageIndex<pages)doc.getPage(discPageIndex).drawText('- DISC FUEL DUE TO WEATHER',{x:45,y:180,size:10,font});
  // A seven-page PDF carrying a leftover destination for page index 58.
  const ctx=doc.context,N=lib.PDFName,root=ctx.obj({Type:'Outlines',Count:2}),rootRef=ctx.register(root);
  const first=ctx.obj({Title:lib.PDFHexString.fromText('FlightPlan'),Parent:rootRef,Dest:[58,N.of('Fit')]}),firstRef=ctx.register(first);
@@ -93,6 +93,15 @@ test('DISC follows the complete matching row, including split text items and tra
  assert.equal(layout.x,230);assert.equal(layout.y,310);assert.equal(layout.size,10);
  await assert.rejects(api.discLayout({...page,getTextContent:async()=>({items:[]})},'DISC 42',font),/확정하지 못/);
  await assert.rejects(api.discLayout({...page,view:[0,0,240,842]},'DISC 42',font),/여백이 부족/);
+});
+
+test('DISC follows its label when the label is on a different page from the old fixed target',async()=>{
+ const ui=app();await ui.api.run(file(await fixture({discPageIndex:6})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const text=async n=>(await(await read.getPage(n)).getTextContent()).items.map(t=>t.str).join(' ');
+  assert.match(await text(7),/DISC 42/);assert.doesNotMatch(await text(6),/DISC 42/);
+ });
 });
 
 test('ATS discovery distinguishes standalone submitted copy from CFP and FlightInfo repeats',()=>{
