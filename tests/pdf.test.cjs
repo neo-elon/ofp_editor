@@ -41,6 +41,28 @@ async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7
 }
 function file(bytes){return {name:'input.pdf',type:'application/pdf',arrayBuffer:async()=>Uint8Array.from(bytes).buffer}}
 
+test('browser safety asset URL tracks its content and exports the required whitespace API',()=>{
+ const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8');
+ const src=html.match(/<script src="(pdf-safety\.js\?v=[a-f0-9]+)"><\/script>/)[1];
+ const url=new URL(src,'https://local.test/ofp_editor/');
+ const source=fs.readFileSync(path.join(__dirname,'..',path.basename(url.pathname)),'utf8');
+ // Git may check out CRLF on Windows; use canonical LF content on every platform.
+ assert.equal(url.searchParams.get('v'),require('node:crypto').createHash('sha256').update(source.replace(/\r\n/g,'\n')).digest('hex').slice(0,16));
+ const context=require('node:vm').createContext({});
+ require('node:vm').runInContext(source,context);
+ assert.equal(typeof context.OFPSafety.whitespace,'function');
+});
+
+test('stale safety asset stops before reading the PDF and shows a refresh instruction',async()=>{
+ let reads=0;
+ const ui=app(browserPdfjs,{...safety,whitespace:undefined});
+ await ui.api.run({name:'input.pdf',type:'application/pdf',arrayBuffer:async()=>{reads++;throw Error('must not read')}});
+ assert.equal(reads,0);assert.equal(ui.blob,undefined);
+ assert.match(ui.elements.status.textContent,/모듈 버전이 일치하지 않습니다/);
+ assert.match(ui.elements.status.textContent,/새로고침/);
+ assert.equal(ui.elements.choose.disabled,false);
+});
+
 
 test('outline handles zero, named/ref destinations, invalid indices and broken outline',async()=>{
  const {api}=app();const resolved=[];
