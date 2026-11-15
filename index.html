@@ -30,13 +30,15 @@ const BLUE=[2/255,85/255,214/255],RED=[.85,.12,.12],MONTHS=['Jan','Feb','Mar','A
 function message(s,type){status.textContent=s;status.className=type||''}
 function pct(n){progress.style.display='block';bar.style.width=n+'%'}
 function abort(s){throw new Error(s)}
-function pick(){input.click()}
+let busy=false;
+function pick(){if(!busy)input.click()}
 choose.onclick=e=>{e.stopPropagation();pick()};drop.onclick=pick;
 drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();pick()}};
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('active')};drop.ondragleave=()=>drop.classList.remove('active');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('active');if(e.dataTransfer.files[0])run(e.dataTransfer.files[0])};
 input.onchange=()=>{if(input.files[0])run(input.files[0]);input.value=''};
 async function readLines(doc,n){
+ if(!validPage(n,doc.numPages))abort('PDF 페이지 범위를 벗어났습니다: '+n+' / '+doc.numPages);
  const page=await doc.getPage(n+1),c=await page.getTextContent(),rows=[];
  for(const item of c.items){if(!item.str||!item.str.trim())continue;
   const x=item.transform[4],y=item.transform[5];let row=rows.find(r=>Math.abs(r.y-y)<2.3);
@@ -109,6 +111,8 @@ function drawRoute(page,route,result,font,lib){
  if(result.match){const i=lines.length-1,last=lines[i];page.drawText('(Checked)',{x:25+font.widthOfTextAtSize(last,size)+5,y:h-17-11.5*i,size,font,color:lib.rgb(...BLUE)})}
 }
 function addBookmarks(doc,items,lib){
+ if(!items.length)return;
+ for(const item of items)if(!validPage(item.page,doc.getPageCount()))abort('북마크 페이지 범위 오류: '+item.title);
  const ctx=doc.context,N=lib.PDFName,H=lib.PDFHexString,root=ctx.obj({Type:N.of('Outlines'),Count:items.length}),rootRef=ctx.register(root),refs=items.map(()=>ctx.nextRef());
  items.forEach((it,i)=>{const node=ctx.obj({Title:H.fromText(it.title),Parent:rootRef,Dest:[doc.getPage(it.page).ref,N.of('Fit')]});
   if(i)node.set(N.of('Prev'),refs[i-1]);if(i<items.length-1)node.set(N.of('Next'),refs[i+1]);ctx.assign(refs[i],node);
@@ -116,55 +120,86 @@ function addBookmarks(doc,items,lib){
  root.set(N.of('First'),refs[0]);root.set(N.of('Last'),refs[refs.length-1]);doc.catalog.set(N.of('Outlines'),rootRef);doc.catalog.set(N.of('PageMode'),N.of('UseOutlines'));
 }
 async function readOutline(doc){
- const found={};async function walk(nodes){for(const node of nodes||[]){
-  if(node.dest)try{const dest=typeof node.dest==='string'?await doc.getDestination(node.dest):node.dest;if(dest&&dest[0])found[node.title]=await doc.getPageIndex(dest[0])}catch(e){}
+ const found=Object.create(null);async function walk(nodes){for(const node of nodes||[]){
+  if(node.dest)try{
+   const dest=typeof node.dest==='string'?await doc.getDestination(node.dest):node.dest;
+   // Explicit integer destinations are already zero-based; object refs need resolution.
+   const target=dest&&dest[0],index=Number.isInteger(target)?target:target?await doc.getPageIndex(target):undefined;
+   if(validPage(index,doc.numPages)&&found[node.title]===undefined)found[node.title]=index;
+  }catch(e){console.warn('북마크 목적지를 읽지 못했습니다:',node.title,e)}
   if(node.items)await walk(node.items);
- }}await walk(await doc.getOutline());return found;
+ }}try{await walk(await doc.getOutline())}catch(e){console.warn('기존 북마크를 읽지 못해 본문에서 검색합니다.',e)}return found;
+}
+function validPage(index,count){return Number.isInteger(index)&&index>=0&&index<count}
+function refKey(ref){return ref&&Number.isInteger(ref.num)&&Number.isInteger(ref.gen)?ref.num+':'+ref.gen:null}
+async function mapPages(read,doc){
+ // Never pass an index from one parser directly to the other. Match actual PDF objects.
+ const pages=doc.getPages(),byRef=new Map(pages.map((p,i)=>[p.ref.objectNumber+':'+p.ref.generationNumber,i])),mapping=[];
+ if(read.numPages!==pages.length)abort('PDF 페이지 구조가 일치하지 않습니다 (PDF.js '+read.numPages+' / pdf-lib '+pages.length+'). 원본 PDF를 다시 내보낸 뒤 시도하세요.');
+ for(let i=0;i<read.numPages;i++){
+  const page=await read.getPage(i+1),index=byRef.get(refKey(page.ref));
+  if(!validPage(index,pages.length)||mapping.includes(index))abort('PDF 페이지 참조가 일치하지 않습니다: '+(i+1)+'페이지. 원본 PDF를 다시 내보낸 뒤 시도하세요.');
+  mapping.push(index);
+ }
+ return mapping;
+}
+function findCFP(texts,preferred){
+ const candidates=Object.keys(texts).map(Number);
+ if(validPage(preferred,candidates.length)){candidates.splice(candidates.indexOf(preferred),1);candidates.unshift(preferred)}
+ for(const page of candidates){try{return {page,cfp:parseCFP(texts[page])}}catch(e){}}
+ abort('CFP PLAN 번호, 편명/날짜 또는 완전한 CFP Route를 찾지 못했습니다. PDF의 텍스트 추출 상태를 확인하세요.');
 }
 async function run(file){
+ if(busy)return;
  if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf'){message('PDF 파일을 선택하세요.','error');return}
- choose.disabled=true;pct(4);message('PDF를 읽는 중입니다...');
+ busy=true;let loadingTask;choose.disabled=true;pct(4);message('PDF를 읽는 중입니다...');
  try{
   if(!window.pdfjsLib||!window.PDFLib)abort('PDF 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
   const pdfjs=window.pdfjsLib,lib=window.PDFLib;pdfjs.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  const bytes=await file.arrayBuffer(),read=await pdfjs.getDocument({data:new Uint8Array(bytes.slice(0))}).promise,outline=await readOutline(read);
-  const cfpPage=outline.FlightPlan!==undefined?outline.FlightPlan:1,cfp=parseCFP(await readLines(read,cfpPage));
-  pct(18);message('CFP '+cfp.plan+' / '+cfp.flight+' 확인\nATS Route 및 페이지 구성을 분석 중입니다...');
-  const sections={FlightPlan:cfpPage},texts={};let atsPage=-1,flightInfo=outline.FlightInfo,ocean=outline.OceanicTracks;
+  const bytes=await file.arrayBuffer();
+  // The PDF stays in memory. External CMaps/fonts are library assets, never uploaded PDF data.
+  loadingTask=pdfjs.getDocument({data:new Uint8Array(bytes.slice(0)),isEvalSupported:false,cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'});
+  const read=await loadingTask.promise,outline=await readOutline(read);
+  const doc=await lib.PDFDocument.load(bytes,{updateMetadata:false}),pageMap=await mapPages(read,doc);
+  pct(18);message('CFP / ATS Route 및 페이지 구성을 분석 중입니다...');
+  const sections={},texts={};let atsPage=-1,flightInfo=outline.FlightInfo,ocean=outline.OceanicTracks;
   for(let start=0;start<read.numPages;start+=7){
    const batch=Array.from({length:Math.min(7,read.numPages-start)},(_,i)=>start+i);
-   await Promise.all(batch.map(async i=>{
-    const lines=await readLines(read,i),t=lines.join('\n');texts[i]=lines;
+   const linesBatch=await Promise.all(batch.map(i=>readLines(read,i)));
+   // Apply detections in document order, independent of text extraction completion order.
+   batch.forEach((i,offset)=>{
+    const lines=linesBatch[offset],t=lines.join('\n');texts[i]=lines;
     if(/^\(FPL-[A-Z0-9]+-IS/m.test(t))atsPage=i;
     if(/WEATHER\s+BRIEFING/i.test(t)&&sections['Weather Briefing']===undefined)sections['Weather Briefing']=i;
     if(/w\s*i\s*n\s*t\s*e\s*m\s*1/i.test(t)&&sections['Weather Charts']===undefined)sections['Weather Charts']=i;
     if(/c\s*r\s*o\s*s\s*s/i.test(t)&&sections['Cross Chart']===undefined)sections['Cross Chart']=i;
     const n=t.match(/KOREAN\s+AIR\s+NOTAM\s+PACKAGE\s*([123])/i);if(n)sections['Notam '+n[1]]=i;
-    if(i>cfpPage+15&&/CFP\s+PLAN\s+\d+/i.test(t)&&flightInfo===undefined)flightInfo=i;
-   }));pct(20+Math.round(50*(start+batch.length)/read.numPages));
+   });pct(20+Math.round(50*(start+batch.length)/read.numPages));
   }
+  const {page:cfpPage,cfp}=findCFP(texts,outline.FlightPlan);sections.FlightPlan=cfpPage;
+  if(flightInfo===undefined)for(let i=cfpPage+16;i<read.numPages;i++)if(/CFP\s+PLAN\s+\d+/i.test(texts[i].join('\n'))){flightInfo=i;break}
   if(atsPage<0)abort('ATS FLIGHT PLAN 페이지를 찾지 못했습니다.');
   sections['ATS FLIGHT PLAN']=atsPage;sections.Header=atsPage+1;
   if(flightInfo!==undefined)sections.FlightInfo=flightInfo;if(ocean!==undefined)sections.OceanicTracks=ocean;
   const ats=parseATS(texts[atsPage],cfp.dest),result=compare(cfp.route,ats,cfp.origin,cfp.dest);
   pct(76);message('Route '+(result.match?'일치':'불일치')+'\nPDF에 표시와 북마크를 추가하는 중입니다...');
-  const doc=await lib.PDFDocument.load(bytes,{updateMetadata:false}),font=await doc.embedFont(lib.StandardFonts.Helvetica);
-  drawRoute(doc.getPage(atsPage),cfp.route,result,font,lib);
-  if(cfp.disc&&atsPage+2<doc.getPageCount()){
-   const p=doc.getPage(atsPage+2);p.drawText('DISC '+cfp.disc,{x:370,y:p.getHeight()-707,size:10,font,color:lib.rgb(...BLUE)});
+  const font=await doc.embedFont(lib.StandardFonts.Helvetica);
+  drawRoute(doc.getPage(pageMap[atsPage]),cfp.route,result,font,lib);
+  if(cfp.disc&&validPage(atsPage+2,read.numPages)){
+   const p=doc.getPage(pageMap[atsPage+2]);p.drawText('DISC '+cfp.disc,{x:370,y:p.getHeight()-707,size:10,font,color:lib.rgb(...BLUE)});
   }
   if(cfp.times&&sections['Weather Briefing']!==undefined){
-   const p=doc.getPage(sections['Weather Briefing']),t='ETD '+cfp.times[1]+' '+cfp.times[2]+'Z ETA '+cfp.times[3]+' '+cfp.times[4]+'Z';
+   const p=doc.getPage(pageMap[sections['Weather Briefing']]),t='ETD '+cfp.times[1]+' '+cfp.times[2]+'Z ETA '+cfp.times[3]+' '+cfp.times[4]+'Z';
    p.drawText(t,{x:315,y:p.getHeight()-215,size:10,font,color:lib.rgb(...BLUE)});
   }
   const order=['FlightPlan','ATS FLIGHT PLAN','Header','Weather Briefing','Weather Charts','Cross Chart','Notam 1','Notam 2','Notam 3','FlightInfo','OceanicTracks'];
-  const bookmarks=order.filter(k=>sections[k]!==undefined&&sections[k]>=0&&sections[k]<doc.getPageCount()).map(k=>({title:k,page:sections[k]}));
+  const bookmarks=order.filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   addBookmarks(doc,bookmarks,lib);pct(90);
   const output=await doc.save({useObjectStreams:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);
   message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+bookmarks.length+'개\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
- }catch(e){progress.style.display='none';message('처리 중단: '+(e.message||String(e))+'\n원본 PDF는 변경되지 않았습니다.','error');console.error(e)}finally{choose.disabled=false}
+ }catch(e){progress.style.display='none';message('처리 중단: '+(e.message||String(e))+'\n원본 PDF는 변경되지 않았습니다.','error');console.error(e)}finally{try{if(loadingTask)await loadingTask.destroy()}catch(e){console.warn('PDF worker 정리 실패',e)}busy=false;choose.disabled=false}
 }
 })();
 </script>
