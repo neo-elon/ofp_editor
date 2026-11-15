@@ -6,11 +6,16 @@ const {app,browserPdfjs,inspect,normalize,lib,safety}=require('./app-harness.cjs
 const cfpLines=['CFP PLAN 1234','FLIGHT RELEASE KAL123 RKSI/RJAA ON 15/NOV/26','DISC 42','ETD RKSI 0100Z ETA RJAA 0300Z','2ND-$','RKSI DCT ABC A1 DEF DCT RJAA','DIST LATITUDE'];
 const atsLines=['(FPL-KAL123-IS','-N0450F350 ABC A1 DEF','-RJAA0200'];
 
-async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7,atsIndex=3,staleObjectStream=false}={}){
+async function fixture({mismatch=false,lastATS=false,malformedCmap=false,pages=7,atsIndex=3,staleObjectStream=false,longRoute=false,blockedMargin=false}={}){
  const doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
  for(let i=0;i<pages;i++){const p=doc.addPage([595,842]);p.drawText('ORIGINAL PAGE '+(i+1),{x:30,y:400,size:10,font})}
  const write=(i,lines)=>lines.forEach((s,j)=>doc.getPage(i).drawText(s,{x:30,y:760-j*16,size:10,font}));
- write(0,cfpLines);write(lastATS?pages-1:atsIndex,mismatch?atsLines.map(s=>s.replace('DEF','XYZ')):atsLines);
+ const route=Array(55).fill('ABCDE').join(' ');
+ const split=s=>s.split(' ').reduce((lines,word,i)=>{if(i%12===0)lines.push([]);lines.at(-1).push(word);return lines},[]).map(words=>words.join(' '));
+ write(0,longRoute?[...cfpLines.slice(0,5),...split('RKSI '+route+' RJAA'),cfpLines[6]]:cfpLines);
+ write(lastATS?pages-1:atsIndex,longRoute?[atsLines[0],...split('-N0450F350 '+(mismatch?route.replace('ABCDE','XYZ'):route)),atsLines[2]]:mismatch?atsLines.map(s=>s.replace('DEF','XYZ')):atsLines);
+ if(longRoute)doc.getPage(atsIndex).drawText('ORIGINAL BLACK HEADER',{x:25,y:775,size:10,font});
+ if(blockedMargin)doc.getPage(atsIndex).drawRectangle({x:0,y:772,width:595,height:70,color:lib.rgb(0,0,0)});
  write(2,['WEATHER BRIEFING']);write(1,['w i n t e m 1']);write(4,['c r o s s']);write(5,['KOREAN AIR NOTAM PACKAGE 1']);
  // A seven-page PDF carrying a leftover destination for page index 58.
  const ctx=doc.context,N=lib.PDFName,root=ctx.obj({Type:'Outlines',Count:2}),rootRef=ctx.register(root);
@@ -101,6 +106,31 @@ test('drawing metrics use unkerned PDF advances and preserve an existing route a
  assert.equal(api.routeLayout(annotations,route,{match:true},font,595,842).size,9);
  assert.equal(api.routeLayout([],route,{match:true},font,595,842).size,10);
  assert.throws(()=>api.routeLayout([{...annotations[0],rect:[160,792,585,840]}],route,{match:true},font,595,842),/여백이 부족/);
+});
+
+for(const mismatch of [false,true])test('four-line route preserves black header and '+(mismatch?'red underlines':'Checked'),async()=>{
+ const bytes=await fixture({longRoute:true,mismatch}),edits=[],ui=app(undefined,{...safety,recordPage:(page,index,marks,view)=>{
+  const target=safety.recordPage(page,index,marks,view);
+  return {...target,drawLine(opts){edits.push(opts);target.drawLine(opts)}};
+ }});
+ await ui.api.run(file(bytes));assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const items=(await(await read.getPage(4)).getTextContent()).items;
+  const route=items.filter(t=>t.str.includes('ABCDE')&&t.transform[5]>790);
+  assert.equal(route.length,4);
+  assert.equal(items.some(t=>t.str==='(Checked)'),!mismatch);
+  if(mismatch)assert.ok(edits.some(e=>e.color.red===.85));
+  assert.ok(items.some(t=>t.str==='ORIGINAL BLACK HEADER'&&t.transform[5]===775));
+ });
+});
+
+test('route placement searches clear margin and rejects an occupied top margin',async()=>{
+ const {api}=app(),doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ const layout=api.routeLayout([],cfpLines[5],{match:true},font,595,842,r=>r[1]>825);
+ assert.ok(layout.top<17);
+ assert.throws(()=>api.routeLayout([],Array(200).fill('ABCDE').join(' '),{match:true},font,595,842),/4줄/);
+ const ui=app();await ui.api.run(file(await fixture({longRoute:true,blockedMargin:true})));
+ assert.equal(ui.blob,undefined);assert.match(ui.elements.status.textContent,/여백이 부족/);
 });
 
 test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotations/bookmarks/filename',async()=>{

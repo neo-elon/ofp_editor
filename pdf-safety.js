@@ -49,6 +49,18 @@ async function raster(page,document){
  const pixels=ctx.getImageData(0,0,canvas.width,canvas.height);
  canvas.width=0;canvas.height=0;return {pixels,viewport};
 }
+async function whitespace(page,document){
+ const {pixels,viewport}=await raster(page,document);
+ return rect=>{
+  const r=viewport.convertToViewportRectangle(rect),left=Math.floor(Math.min(r[0],r[2])),right=Math.ceil(Math.max(r[0],r[2])),top=Math.floor(Math.min(r[1],r[3])),bottom=Math.ceil(Math.max(r[1],r[3]));
+  if(left<0||top<0||right>=pixels.width||bottom>=pixels.height)return false;
+  for(let y=top;y<=bottom;y++)for(let x=left;x<=right;x++){
+   const offset=(y*pixels.width+x)*4;
+   if(pixels.data[offset]!==255||pixels.data[offset+1]!==255||pixels.data[offset+2]!==255)return false;
+  }
+  return true;
+ };
+}
 async function verify(before,after,{document,edits=[],progress=()=>{}}){
  if(before.numPages!==after.numPages)fail('검증 실패: 원본 '+before.numPages+' / 결과 '+after.numPages+'페이지. 다운로드하지 않습니다.');
  for(let index=0;index<before.numPages;index++){
@@ -86,6 +98,6 @@ function recordPage(page,index,edits,view){
   const width=textWidth(opts.font,text,opts.size);add({text,x:opts.x,y:opts.y,rect:[opts.x-2,opts.y-opts.size*.3-2,opts.x+width+2,opts.y+opts.size+2]});page.drawText(text,opts);
  },drawLine(opts){const {start:a,end:b}=opts;add({rect:[Math.min(a.x,b.x)-2,Math.min(a.y,b.y)-2,Math.max(a.x,b.x)+2,Math.max(a.y,b.y)+2]});page.drawLine(opts)}};
 }
-const api={diagnose,normalizeWithModule,normalize,verify,recordPage,textWidth};
+const api={diagnose,normalizeWithModule,normalize,verify,recordPage,textWidth,whitespace};
 if(typeof module==='object'&&module.exports)module.exports=api;else root.OFPSafety=api;
 })(globalThis);
