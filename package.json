@@ -1,8 +1,15 @@
 {
   "name": "ofp-editor",
   "private": true,
-  "scripts": { "test": "node --test tests/*.test.cjs" },
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  },
+  "overrides": {
+    "pdfjs-dist": { "canvas": "npm:@napi-rs/canvas@1.1.1" }
+  },
   "devDependencies": {
+    "@napi-rs/canvas": "1.1.1",
+    "@neslinesli93/qpdf-wasm": "0.3.1",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "3.11.174"
   }

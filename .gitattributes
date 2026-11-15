@@ -1,0 +1,3 @@
+# Preserve the exact pinned npm distribution bytes on every platform.
+vendor/qpdf/qpdf.js -text
+vendor/qpdf/qpdf.wasm -text
