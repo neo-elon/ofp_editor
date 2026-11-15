@@ -127,7 +127,29 @@ test('drawing metrics use unkerned PDF advances and preserve an existing route a
  const {api}=app(),route=cfpLines[5],annotations=[{subtype:'FreeText',contentsObj:{str:route},rect:[160,792,585,815]}];
  assert.equal(api.routeLayout(annotations,route,{match:true},font,595,842).size,9);
  assert.equal(api.routeLayout([],route,{match:true},font,595,842).size,10);
- assert.throws(()=>api.routeLayout([{...annotations[0],rect:[160,792,585,840]}],route,{match:true},font,595,842),/여백이 부족/);
+ assert.ok(api.routeLayout([{...annotations[0],rect:[160,792,585,840]}],route,{match:true},font,595,842).top>50);
+ assert.throws(()=>api.routeLayout([{...annotations[0],rect:[0,772,595,842]}],route,{match:true},font,595,842),/여백이 부족/);
+});
+
+test('four-line route can use clear space below an existing route annotation',async()=>{
+ const {api}=app(),doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ const route='RKSI '+Array(55).fill('ABCDE').join(' ')+' RJAA';
+ const annotations=[{subtype:'FreeText',contentsObj:{str:route},rect:[25,832,570,842]}];
+ const source=doc.addPage([595,842]);
+ source.drawText('EXISTING ROUTE',{x:25,y:833,size:8,font});
+ const original=await doc.save(),editable=await lib.PDFDocument.load(original),newFont=await editable.embedFont(lib.StandardFonts.Helvetica),edits=[];
+ await inspect(original,async before=>{
+  const clear=await safety.whitespace(await before.getPage(1),app().document);
+  const layout=api.routeLayout(annotations,route,{match:true},newFont,595,842,clear);
+  assert.ok(842-layout.top+layout.size+2<832);
+  api.drawRoute(safety.recordPage(editable.getPage(0),0,edits,[0,0,595,842]),route,{match:true},newFont,lib,layout);
+  await inspect(await editable.save(),async after=>{
+   await safety.verify(before,after,{document:app().document,edits});
+   const items=(await(await after.getPage(1)).getTextContent()).items;
+   assert.equal(items.filter(t=>t.str.includes('ABCDE')).length,4);
+   assert.ok(items.some(t=>t.str==='EXISTING ROUTE'));
+  });
+ });
 });
 
 for(const mismatch of [false,true])test('four-line route preserves black header and '+(mismatch?'red underlines':'Checked'),async()=>{

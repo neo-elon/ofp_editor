@@ -104,14 +104,17 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
   const {size,leading}=candidate,lines=wrap(route,font,size,width-50,result.match);
   if(lines.length>4)continue;
   // Search only the top 70pt margin; include padding used by download verification.
-  const floor=Math.max(height-70,...existing.map(a=>a.rect[3]));
+  // A matching annotation is an obstacle, not the bottom edge of all usable space.
+  const floor=height-70;
   const maxTop=height-floor-leading*(lines.length-1)-size*.3-2;
   const tops=[candidate.top];for(let top=size+2.25;top<=maxTop;top++)tops.push(top);
   for(const top of tops){
    if(top>maxTop)continue;
    if(lines.every((line,i)=>{
     const y=height-top-leading*i,checked=result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0;
-    return isClear([23,y-size*.3-2,27+textWidth(font,line,size)+checked,y+size+2]);
+    const rect=[23,y-size*.3-2,27+textWidth(font,line,size)+checked,y+size+2];
+    const overlapsExisting=existing.some(a=>rect[0]<=a.rect[2]&&rect[2]>=a.rect[0]&&rect[1]<=a.rect[3]&&rect[3]>=a.rect[1]);
+    return !overlapsExisting&&isClear(rect);
    }))return {size,top,leading};
   }
  }
