@@ -23,7 +23,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=6617907af56554fb"></script>
+<script src="pdf-safety.js?v=a4bb1e1b61683ef4"></script>
 <script>
 (function(){
 'use strict';
@@ -39,15 +39,20 @@ drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();pick()}};
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('active')};drop.ondragleave=()=>drop.classList.remove('active');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('active');if(e.dataTransfer.files[0])run(e.dataTransfer.files[0])};
 input.onchange=()=>{if(input.files[0])run(input.files[0]);input.value=''};
-async function readLines(doc,n){
- if(!validPage(n,doc.numPages))abort('PDF 페이지 범위를 벗어났습니다: '+n+' / '+doc.numPages);
- const page=await doc.getPage(n+1),c=await page.getTextContent(),rows=[];
- for(const item of c.items){if(!item.str||!item.str.trim())continue;
-  const x=item.transform[4],y=item.transform[5];let row=rows.find(r=>Math.abs(r.y-y)<2.3);
-  if(!row){row={y,parts:[]};rows.push(row)}row.parts.push({x,s:item.str});
+function textRows(items){
+ const rows=[];
+ for(const item of items){if(!item.str?.trim())continue;
+  const y=item.transform[5];let row=rows.find(r=>Math.abs(r.y-y)<2.3);
+  if(!row){row={y,items:[]};rows.push(row)}row.items.push(item);
  }
  rows.sort((a,b)=>b.y-a.y);
- return rows.map(r=>r.parts.sort((a,b)=>a.x-b.x).map(p=>p.s).join(' ').replace(/\s+/g,' ').trim()).filter(Boolean);
+ for(const row of rows){row.items.sort((a,b)=>a.transform[4]-b.transform[4]);row.text=row.items.map(t=>t.str).join(' ').replace(/\s+/g,' ').trim()}
+ return rows;
+}
+async function readLines(doc,n){
+ if(!validPage(n,doc.numPages))abort('PDF 페이지 범위를 벗어났습니다: '+n+' / '+doc.numPages);
+ const page=await doc.getPage(n+1);
+ return textRows((await page.getTextContent()).items).map(row=>row.text);
 }
 function parseCFP(lines){
  const t=lines.join('\n'),plan=(t.match(/CFP\s+PLAN\s+(\d+)/i)||[])[1];
@@ -98,13 +103,7 @@ function wrap(route,font,size,max,checked){
 }
 function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,size)}
 async function discLayout(page,text,font){
- const rows=[];
- for(const item of (await page.getTextContent()).items){
-  if(!item.str?.trim())continue;
-  const y=item.transform[5];let row=rows.find(r=>Math.abs(r.y-y)<2.3);
-  if(!row){row={y,items:[]};rows.push(row)}row.items.push(item);
- }
- const matches=rows.filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.items.sort((a,b)=>a.transform[4]-b.transform[4]).map(t=>t.str).join(' ')));
+ const matches=textRows((await page.getTextContent()).items).filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.text));
  if(matches.length!==1)abort('DISC FUEL DUE TO 문구가 있는 줄을 확정하지 못했습니다. 임의 위치에 DISC를 표시하지 않습니다.');
  const row=matches[0],x=Math.max(...row.items.map(t=>t.transform[4]+t.width))+10;
  for(let size=10;size>=6;size-=.5)if(x+textWidth(font,text,size)+2<=page.view[2])return {x,y:row.y,size};
@@ -118,6 +117,7 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
  for(const candidate of candidates){
   const {size,leading}=candidate,lines=wrap(route,font,size,width-50,result.match);
   if(lines.length>4)continue;
+  const widths=lines.map((line,i)=>textWidth(font,line,size)+(result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0));
   // Search only the top 70pt margin; include padding used by download verification.
   // A matching annotation is an obstacle, not the bottom edge of all usable space.
   const floor=height-70;
@@ -125,9 +125,8 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
   const tops=[candidate.top];for(let top=size+2.25;top<=maxTop;top++)tops.push(top);
   for(const top of tops){
    if(top>maxTop)continue;
-   if(lines.every((line,i)=>{
-    const y=height-top-leading*i,checked=result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0;
-    const rect=[23,y-size*.3-2,27+textWidth(font,line,size)+checked,y+size+2];
+   if(lines.every((_,i)=>{
+    const y=height-top-leading*i,rect=[23,y-size*.3-2,27+widths[i],y+size+2];
     const overlapsExisting=existing.some(a=>rect[0]<=a.rect[2]&&rect[2]>=a.rect[0]&&rect[1]<=a.rect[3]&&rect[3]>=a.rect[1]);
     return rect[2]<=width-23&&!overlapsExisting&&isClear(rect);
    }))return {size,top,leading};
@@ -138,11 +137,11 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
 function drawRoute(page,route,result,font,lib,layout={size:10,top:17,leading:11.5}){
  const h=page.getHeight(),{size,top,leading}=layout,lines=wrap(route,font,size,page.getWidth()-50,result.match);
  if(lines.length>4)abort('CFP Route가 상단 4줄에 들어가지 않아 처리를 중단했습니다.');
+ const needles=result.match?[]:[...new Set(result.bad.map(token=>/^(\d{2})N(\d{3})W$/.test(token)?'N'+token.slice(0,2)+'W'+token.slice(3,6):token))].filter(Boolean);
  for(let i=0;i<lines.length;i++){
   const s=lines[i],y=h-top-leading*i;page.drawText(s,{x:25,y,size,font,color:lib.rgb(...BLUE)});
-  if(!result.match)for(const token of result.bad){
-   const needle=/^(\d{2})N(\d{3})W$/.test(token)?'N'+token.slice(0,2)+'W'+token.slice(3,6):token;
-   if(!needle)continue;let pos=s.indexOf(needle);
+  for(const needle of needles){
+   let pos=s.indexOf(needle);
    while(pos>=0){const left=textWidth(font,s.slice(0,pos),size),w=textWidth(font,needle,size);
     page.drawLine({start:{x:25+left,y:y-1.5},end:{x:25+left+w,y:y-1.5},thickness:1.2,color:lib.rgb(...RED)});
     pos=s.indexOf(needle,pos+needle.length);
@@ -175,12 +174,12 @@ function validPage(index,count){return Number.isInteger(index)&&index>=0&&index<
 function refKey(ref){return ref&&Number.isInteger(ref.num)&&Number.isInteger(ref.gen)?ref.num+':'+ref.gen:null}
 async function mapPages(read,doc){
  // Never pass an index from one parser directly to the other. Match actual PDF objects.
- const pages=doc.getPages(),byRef=new Map(pages.map((p,i)=>[p.ref.objectNumber+':'+p.ref.generationNumber,i])),mapping=[];
+ const pages=doc.getPages(),byRef=new Map(pages.map((p,i)=>[p.ref.objectNumber+':'+p.ref.generationNumber,i])),mapping=[],seen=new Set();
  if(read.numPages!==pages.length)abort('PDF 페이지 구조가 일치하지 않습니다 (PDF.js '+read.numPages+' / pdf-lib '+pages.length+'). 원본 PDF를 다시 내보낸 뒤 시도하세요.');
  for(let i=0;i<read.numPages;i++){
   const page=await read.getPage(i+1),index=byRef.get(refKey(page.ref));
-  if(!validPage(index,pages.length)||mapping.includes(index))abort('PDF 페이지 참조가 일치하지 않습니다: '+(i+1)+'페이지. 원본 PDF를 다시 내보낸 뒤 시도하세요.');
-  mapping.push(index);
+  if(!validPage(index,pages.length)||seen.has(index))abort('PDF 페이지 참조가 일치하지 않습니다: '+(i+1)+'페이지. 원본 PDF를 다시 내보낸 뒤 시도하세요.');
+  seen.add(index);mapping.push(index);
  }
  return mapping;
 }
