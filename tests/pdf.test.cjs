@@ -381,6 +381,25 @@ test('NOTAM 1 header underlines sit between airport codes and the black divider'
  blocked=true;await assert.rejects(api.layoutNotamUnderlines({getPage:async()=>source},links,document),/여백/);
 });
 
+test('NOTAM 1 header underlines use bounded fills, never minimum-pixel strokes',async()=>{
+ const {api,document}=app(),doc=await lib.PDFDocument.create(),page=doc.addPage([100,100]);
+ for(const y of [49,51])page.drawRectangle({x:15,y,width:70,height:1,color:lib.rgb(0,0,0),borderWidth:0});
+ const before=await doc.save(),links=[{page:0,target:0,rect:[20,51,80,61],x:20,y:60,underlineY:50.4,notam1Header:true}],edits=[];
+ api.addNotamLinks(doc,links,[0],lib,edits);
+ const bytes=await doc.save();
+ await inspect(before,async source=>inspect(bytes,async output=>{
+  const page=await output.getPage(1),operators=await page.getOperatorList(),OPS=require('pdfjs-dist/build/pdf.js').OPS;
+  assert.ok(operators.fnArray.includes(OPS.fill));
+  for(const op of [OPS.stroke,OPS.closeStroke,OPS.fillStroke,OPS.eoFillStroke,OPS.closeFillStroke,OPS.closeEOFillStroke])assert.ok(!operators.fnArray.includes(op),'no stroke operator may trigger PDF.js minimum-pixel expansion');
+  await safety.verify(source,output,{document,edits});await api.verifyNotamLinks(output,links,[0]);
+ }));
+ const stroked=await lib.PDFDocument.load(before);
+ stroked.getPage(0).drawLine({start:{x:20,y:50.4},end:{x:80,y:50.4},thickness:.5,color:lib.rgb(2/255,85/255,214/255)});
+ await inspect(before,async source=>inspect(await stroked.save(),async output=>{
+  await assert.rejects(safety.verify(source,output,{document,edits}),/기존 내용/);
+ }));
+});
+
 test('NOTAM underlines allow light gray backgrounds but reject dark content and other colors',async()=>{
  const {document}=app(),edits=[{page:0,rect:[19,49,81,51],kind:'notamUnderline'}];
  async function check(dark,color){

@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.10</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.12</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -338,7 +338,10 @@ function addNotamLinks(doc,links,pageMap,lib,edits){
   const [left,,right]=link.rect,y=link.underlineY,rect=[left-.4,y-.45,right+.4,y+.45];
   if(!Number.isFinite(y))abort('NOTAM 밑줄 위치를 확인하지 못했습니다.');
   if(page.getRotation().angle!==0||rect[0]<0||rect[1]<0||rect[2]>page.getWidth()||rect[3]>page.getHeight())abort('NOTAM 밑줄 위치가 페이지 범위를 벗어났습니다.');
-  page.drawLine({start:{x:left,y},end:{x:right,y},thickness:.5,color:lib.rgb(...BLUE)});
+  // PDF.js enlarges subpixel strokes to at least one pixel. In the narrow
+  // NOTAM 1 header gap, use a fill with explicit bounds instead of a stroke.
+  if(link.notam1Header)page.drawRectangle({x:left,y:y-.2,width:right-left,height:.4,color:lib.rgb(...BLUE),borderWidth:0});
+  else page.drawLine({start:{x:left,y},end:{x:right,y},thickness:.5,color:lib.rgb(...BLUE)});
   edits.push({page:link.page,rect,kind:'notamUnderline'});
   page.node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:link.rect,Border:[0,0,0],BS:{Type:'Border',W:0},NM:lib.PDFString.of('OFP-NOTAM-'+index),Dest:[target.ref,'XYZ',link.x,link.y,null]})));
  }
