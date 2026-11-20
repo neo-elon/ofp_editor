@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.6</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.7</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -44,7 +44,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=640302cc651d90c5"></script>
+<script src="pdf-safety.js?v=b6ee76fe61379f4f"></script>
 <script>
 (function(){
 'use strict';
@@ -280,11 +280,38 @@ async function notamLinks(read,texts){
  }
  return links;
 }
-function addNotamLinks(doc,links,pageMap,lib){
+async function layoutNotamUnderlines(read,links,document){
+ for(const pageIndex of new Set(links.map(link=>link.page))){
+  const source=await read.getPage(pageIndex+1),viewport=source.getViewport({scale:1}),canvas=document.createElement('canvas');
+  canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const context=canvas.getContext('2d');
+  await source.render({canvasContext:context,viewport}).promise;
+  const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+  for(const link of links.filter(link=>link.page===pageIndex)){
+   const [left,bottom,right,top]=link.rect,baseline=bottom+(top-bottom)/5,baseRow=viewport.convertToViewportPoint(0,baseline)[1];let chosen;
+   // Align a thin line to one raster row, avoiding text and existing separator rules.
+   for(let row=Math.ceil(baseRow);row<=Math.floor(baseRow+4);row++){
+    let clear=row>=0&&row<canvas.height;
+    for(let x=Math.floor(left);clear&&x<=Math.ceil(right);x++){
+     const at=(row*canvas.width+x)*4,r=pixels[at];clear=x>=0&&x<canvas.width&&Math.min(r,pixels[at+1],pixels[at+2])>=180&&Math.max(r,pixels[at+1],pixels[at+2])-Math.min(r,pixels[at+1],pixels[at+2])<=4;
+    }
+    if(clear){chosen=viewport.convertToPdfPoint(0,row+.5)[1];break}
+   }
+   if(chosen===undefined)abort('NOTAM 링크 아래에 밑줄을 넣을 여백이 없습니다: '+(pageIndex+1)+'페이지, x='+left);link.underlineY=chosen;
+  }
+  canvas.width=canvas.height=0;source.cleanup();
+ }
+}
+function addNotamLinks(doc,links,pageMap,lib,edits){
  for(const [index,link] of links.entries()){
   const page=doc.getPage(pageMap[link.page]),target=doc.getPage(pageMap[link.target]);
   if(!link.rect.every(Number.isFinite)||link.rect[0]<0||link.rect[1]<0||link.rect[2]>page.getWidth()||link.rect[3]>page.getHeight())abort('NOTAM 링크 영역이 페이지 범위를 벗어났습니다.');
-  page.node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:link.rect,Border:[0,0,.8],BS:{Type:'Border',W:.8,S:'U'},C:BLUE,NM:lib.PDFString.of('OFP-NOTAM-'+index),Dest:[target.ref,'XYZ',link.x,link.y,null]})));
+  // Draw the underline in page content: some iPad viewers show /BS /U as a box.
+  const [left,,right]=link.rect,y=link.underlineY,rect=[left-.4,y-.45,right+.4,y+.45];
+  if(!Number.isFinite(y))abort('NOTAM 밑줄 위치를 확인하지 못했습니다.');
+  if(page.getRotation().angle!==0||rect[0]<0||rect[1]<0||rect[2]>page.getWidth()||rect[3]>page.getHeight())abort('NOTAM 밑줄 위치가 페이지 범위를 벗어났습니다.');
+  page.drawLine({start:{x:left,y},end:{x:right,y},thickness:.5,color:lib.rgb(...BLUE)});
+  edits.push({page:link.page,rect,kind:'notamUnderline'});
+  page.node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:link.rect,Border:[0,0,0],BS:{Type:'Border',W:0},NM:lib.PDFString.of('OFP-NOTAM-'+index),Dest:[target.ref,'XYZ',link.x,link.y,null]})));
  }
 }
 async function verifyNotamLinks(read,links,pageMap){
@@ -292,7 +319,7 @@ async function verifyNotamLinks(read,links,pageMap){
  for(const [index,link] of links.entries()){
   const page=pageMap[link.page];if(!pages.has(page))pages.set(page,await (await read.getPage(page+1)).getAnnotations());
   const annotation=pages.get(page).find(a=>a.id&&a.subtype==='Link'&&a.dest&&Array.isArray(a.dest)&&a.rect.every((v,i)=>Math.abs(v-link.rect[i])<.01)&&Math.abs(a.dest[2]-link.x)<.01&&Math.abs(a.dest[3]-link.y)<.01);
-  if(!annotation||await read.getPageIndex(annotation.dest[0])!==pageMap[link.target]||annotation.borderStyle?.style!==5||Math.abs(annotation.borderStyle.width-.8)>.01||!annotation.color||[2,85,214].some((v,i)=>annotation.color[i]!==v))abort('NOTAM 내부 링크 검증에 실패했습니다: '+(index+1));
+  if(!annotation||await read.getPageIndex(annotation.dest[0])!==pageMap[link.target]||annotation.borderStyle?.width!==0)abort('NOTAM 내부 링크 검증에 실패했습니다: '+(index+1));
  }
 }
 async function outlinePage(doc,destination){
@@ -433,7 +460,7 @@ async function run(file){
    const parent=bookmarks.find(item=>item.title===title);
    if(parent)parent.children=Array.from(children,([title,source])=>({title,page:pageMap[source]}));
   }
-  const navigation=await notamLinks(read,texts);addNotamLinks(doc,navigation,pageMap,lib);
+  const navigation=await notamLinks(read,texts);await layoutNotamUnderlines(read,navigation,document);addNotamLinks(doc,navigation,pageMap,lib,edits);
   const allBookmarks=flattenBookmarks(bookmarks);
   addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';

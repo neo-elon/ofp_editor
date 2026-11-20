@@ -345,15 +345,30 @@ test('NOTAM header airport links round trip to explicit headings and preserve ex
  for(const [page,lines] of [[0,['KOREAN AIR NOTAM PACKAGE 2','KE 123 PRINTED AT 1230Z','ERA: RKSI KSFO','KOAK','REFILE: KSFO','[ERA]RKSI/ ICN']],[1,['[ERA]KSFO/ SFO']],[2,['[ERA]KOAK/ OAK','[REFILE]KSFO/ SFO','END OF KOREAN AIR NOTAM PACKAGE 2']],[3,['[ERA]KJFK/ outside']]])lines.forEach((s,i)=>doc.getPage(page).drawText(s,{x:30,y:750-i*20,size:10,font}));
  doc.getPage(0).node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:[10,10,20,20],Border:[0,0,0],A:{S:'URI',URI:lib.PDFString.of('https://example.com')}})));
  const {api,document}=app(),bytes=await doc.save({useObjectStreams:false});let links;
- await inspect(bytes,async read=>{const texts={};for(let i=0;i<read.numPages;i++)texts[i]=await api.readLines(read,i);links=await api.notamLinks(read,texts)});
+ await inspect(bytes,async read=>{const texts={};for(let i=0;i<read.numPages;i++)texts[i]=await api.readLines(read,i);links=await api.notamLinks(read,texts);await api.layoutNotamUnderlines(read,links,document)});
  assert.equal(links.length,8);assert.deepEqual(links.filter((_,i)=>i%2===0).map(l=>l.target),[0,1,2,2]);
- api.addNotamLinks(doc,links,[0,1,2,3],lib);const output=await doc.save({useObjectStreams:false});
+ const edits=[];api.addNotamLinks(doc,links,[0,1,2,3],lib,edits);const output=await doc.save({useObjectStreams:false});
  await inspect(bytes,async before=>inspect(output,async after=>{
-  await safety.verify(before,after,{document});await api.verifyNotamLinks(after,links,[0,1,2,3]);
-  for(let p=1;p<=3;p++)for(const a of await(await after.getPage(p)).getAnnotations())if(a.dest){assert.equal(a.borderStyle.style,5);assert.equal(a.borderStyle.width,.8);assert.deepEqual([...a.color],[2,85,214])}
+  await safety.verify(before,after,{document,edits});await api.verifyNotamLinks(after,links,[0,1,2,3]);
+  for(let p=1;p<=3;p++)for(const a of await(await after.getPage(p)).getAnnotations())if(a.dest){assert.equal(a.borderStyle.width,0)}
   assert.ok((await (await after.getPage(1)).getAnnotations()).some(a=>a.url==='https://example.com/'));
   const wrong=links.map(l=>({...l,target:3}));await assert.rejects(api.verifyNotamLinks(after,wrong,[0,1,2,3]),/NOTAM/);
  }));
+});
+
+test('NOTAM underlines allow light gray backgrounds but reject dark content and other colors',async()=>{
+ const {document}=app(),edits=[{page:0,rect:[19,49,81,51],kind:'notamUnderline'}];
+ async function check(dark,color){
+  const source=await lib.PDFDocument.create(),page=source.addPage([100,100]);
+  page.drawRectangle({x:0,y:0,width:100,height:100,color:lib.rgb(.8,.8,.8)});
+  if(dark)page.drawLine({start:{x:20,y:50},end:{x:80,y:50},thickness:.5,color:lib.rgb(0,0,0)});
+  const before=await source.save(),output=await lib.PDFDocument.load(before);
+  output.getPage(0).drawLine({start:{x:20,y:50},end:{x:80,y:50},thickness:.5,color});
+  return inspect(before,async a=>inspect(await output.save(),async b=>safety.verify(a,b,{document,edits})));
+ }
+ await check(false,lib.rgb(2/255,85/255,214/255));
+ await assert.rejects(check(true,lib.rgb(2/255,85/255,214/255)),/기존 내용/);
+ await assert.rejects(check(false,lib.rgb(1,0,0)),/밑줄/);
 });
 
 test('NOTAM REFILE airports prefer body headings and stay inside their package',()=>{
