@@ -113,6 +113,23 @@ test('ATS discovery distinguishes standalone submitted copy from CFP and FlightI
  assert.throws(()=>api.findATS({5:atsLines.map(t=>t.replace('KAL123','KAL999'))},cfp),/찾지 못/);
 });
 
+test('ATS discovery rejects different origins and never resolves ambiguity by route agreement',()=>{
+ const {api}=app(),cfp=api.parseCFP(cfpLines);
+ const full=origin=>[atsLines[0],'-'+origin+'0100',...atsLines.slice(1)];
+ assert.equal(api.findATS({3:full('RKSS'),8:full('RKSI')},cfp),8);
+ assert.throws(()=>api.findATS({3:full('RKSS')},cfp),/찾지 못/);
+ assert.throws(()=>api.findATS({3:full('RKSI'),8:full('RKSI').map(line=>line.replace('DEF','XYZ'))},cfp),/후보 페이지: 4, 9/);
+ // Missing Item 13 must not turn the destination into an inferred departure.
+ assert.equal(api.findATS({3:atsLines},cfp),3);
+});
+
+test('ambiguous ATS candidates block download and identify candidate pages',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture()),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [i,line] of atsLines.entries())doc.getPage(6).drawText(line,{x:30,y:760-i*16,size:10,font});
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.equal(ui.blob,undefined);assert.match(ui.elements.status.textContent,/후보 페이지: 4, 7/);
+});
+
 test('page identity mapping handles different parser order; rejects missing/duplicate pages',async()=>{
  const {api}=app(),doc=await lib.PDFDocument.create();doc.addPage();doc.addPage();
  const pages=doc.getPages(),ref=i=>({num:pages[i].ref.objectNumber,gen:pages[i].ref.generationNumber});
