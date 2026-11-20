@@ -250,14 +250,15 @@ test('weather chart heading detection ignores references in flight notes and NOT
 
 test('FlightPlan section detection excludes fuel summary rows and sentence references',()=>{
  const {api}=app();
- assert.deepEqual(api.flightPlanSections(['3% CONTINGENCY ERA VALIDATION','EDTO INFORMATION','REFILE FLIGHT PLAN']),['3% Contingency','EDTO','Refile']);
+ assert.deepEqual(api.flightPlanSections(['3% CONTINGENCY ERA VALIDATION','--- EDTO EQUAL TIME POINT 1 ---','REFILE FLT PLAN KAL123']),['3% Contingency','EDTO','Refile']);
  assert.deepEqual(api.flightPlanSections(['3 PCT CONT 0020 00.12','REFILE RES 0000 00.00','REFER TO EDTO INFORMATION','EDTO FUEL 1234']),[]);
- assert.deepEqual(api.flightPlanSections(['EDTO','REFILE','3 PCT CONTINGENCY']),['3% Contingency','EDTO','Refile']);
+ assert.deepEqual(api.flightPlanSections(['EDTO','REFILE','EDTO INFORMATION','REFILE FLIGHT PLAN','3 PCT CONTINGENCY']),['3% Contingency']);
+ assert.deepEqual(api.flightPlanSections(['edto   equal time point','Refile  FLT  Plan:']),['EDTO','Refile']);
 });
 
 test('FlightPlan has three ordered children at first primary-CFP headings alongside weather children',async()=>{
  const doc=await lib.PDFDocument.load(await fixture({pages:12,atsIndex:8})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
- for(const [page,title] of [[2,'3% CONTINGENCY ERA VALIDATION'],[3,'EDTO INFORMATION'],[4,'REFILE FLIGHT PLAN'],[6,'3% CONTINGENCY ERA VALIDATION'],[7,'EDTO SUMMARY'],[9,'REFILE']])doc.getPage(page).drawText(title,{x:30,y:720,size:10,font});
+ for(const [page,title] of [[2,'3% CONTINGENCY ERA VALIDATION'],[3,'EDTO EQUAL TIME POINT 1'],[4,'REFILE FLT PLAN KAL123'],[6,'3% CONTINGENCY ERA VALIDATION'],[7,'EDTO EQUAL TIME POINT 2'],[9,'REFILE FLT PLAN KAL123']])doc.getPage(page).drawText(title,{x:30,y:720,size:10,font});
  const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
  assert.ok(ui.blob,ui.elements.status.textContent);
  await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{

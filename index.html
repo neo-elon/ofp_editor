@@ -189,8 +189,8 @@ function flightPlanSections(lines){
  const headings=lines.map(line=>line.trim().replace(/\s+/g,' ').replace(/[:：]$/,'').toUpperCase());
  return [
   ['3% Contingency',/^3\s*(?:%|PCT)\s*CONTINGENCY(?:\s+(?:ERA(?:\s+VALIDATION)?|VALIDATION|FUEL))?$/],
-  ['EDTO',/^(?:EDTO|ETOPS)(?:\s+(?:INFORMATION|SUMMARY|ANALYSIS|PLANNING|(?:CRITICAL\s+)?FUEL(?:\s+(?:ANALYSIS|SUMMARY|SCENARIO))?))?$/],
-  ['Refile',/^(?:REFILE|REFILING)(?:\s+(?:INFORMATION|SUMMARY|FLIGHT PLAN|PLAN|DATA))?$/]
+  ['EDTO',/\bEDTO\s+EQUAL\s+TIME\s+POINT\b/],
+  ['Refile',/\bREFILE\s+FLT\s+PLAN\b/]
  ].filter(([,pattern])=>headings.some(title=>pattern.test(title))).map(([title])=>title);
 }
 async function readOutline(doc){

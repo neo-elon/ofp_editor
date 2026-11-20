@@ -12,7 +12,7 @@ PDF를 선택하면 기존 북마크와 실제 본문을 분석합니다. pdf-li
 
 기상 책갈피는 **Weather Briefing → WindTemp / SIGWX / ASC(TURB) / Cross Chart** 구조입니다. 각 하위 항목은 해당 제목이 처음 나오는 차트로 연결되며, 파일에서 찾지 못한 차트는 추가하지 않습니다. 저장 후 목적지와 하위 항목 순서를 검증합니다.
 
-**FlightPlan → 3% Contingency / EDTO / Refile** 하위 책갈피는 기본 CFP 구간에서 해당 제목이 처음 나오는 페이지로 연결됩니다. `3 PCT CONT`, `REFILE RES` 같은 연료 요약 행이나 뒤쪽 FlightInfo 사본으로 잘못 연결하지 않으며, 파일에 없는 항목은 추가하지 않습니다.
+**FlightPlan → 3% Contingency / EDTO / Refile** 하위 책갈피는 기본 CFP 구간에서 해당 제목이 처음 나오는 페이지로 연결됩니다. EDTO는 `EDTO EQUAL TIME POINT`, Refile은 `REFILE FLT PLAN` 문구가 들어간 줄을 기준으로 찾습니다. `3 PCT CONT`, `REFILE RES` 같은 연료 요약 행이나 뒤쪽 FlightInfo 사본으로 잘못 연결하지 않으며, 파일에 없는 항목은 추가하지 않습니다.
 
 CFP 본문과 FlightInfo에도 ATS 문장이 반복될 수 있으므로, 동일 편명의 독립된 ATS 페이지를 식별합니다. 후보를 하나로 정하지 못하면 수정하지 않습니다. Route는 상단 여백에 최대 4줄로 배치하고, 필요하면 글자 크기와 줄 간격을 줄입니다. 기존 텍스트·FreeText 주석과 겹치지 않는 공간이 없으면 차단합니다. DISC 값은 `DISC FUEL DUE TO` 문구가 있는 줄 오른쪽에 표시합니다. 글자 폭은 실제 PDF 출력과 같은 비커닝 방식으로 계산합니다.
 
