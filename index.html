@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.9</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.10</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -273,7 +273,7 @@ async function notamLinks(read,texts){
     // Only create navigation when an explicit body heading confirms the target.
     if(!heading)continue;
     const rect=rowRect(row,match.index,match.index+match[0].length),code=match[3]||match[2],at=heading.text.indexOf(code),backRect=rowRect(heading,at<0?0:at,at<0?heading.text.length:at+code.length);
-    links.push({page:header,rect,target,x:backRect[0],y:backRect[3]+12});
+    links.push({page:header,rect,target,x:backRect[0],y:backRect[3]+12,notam1Header:packageTitle==='Notam 1'});
     if(!returned.has(title)){links.push({page:target,rect:backRect,target:header,x:rect[0],y:rect[3]+12});returned.add(title)}
    }
   }
@@ -293,9 +293,26 @@ async function layoutNotamUnderlines(read,links,document){
   }
   for(const line of lines.values()){
    const baseRow=viewport.convertToViewportPoint(0,line.baseline)[1];let chosen;
+   let candidates=Array.from({length:Math.max(0,Math.floor(baseRow+4)-Math.ceil(baseRow)+1)},(_,i)=>Math.ceil(baseRow)+i);
+   if(line.links.some(link=>link.notam1Header)){
+    const left=Math.floor(Math.min(...line.links.map(link=>link.rect[0]))),right=Math.ceil(Math.max(...line.links.map(link=>link.rect[2])));
+    let divider;
+    for(let row=Math.floor(baseRow);row<=Math.min(canvas.height-1,Math.ceil(baseRow+6));row++){
+     let dark=0;for(let x=left;x<=right;x++){const at=(row*canvas.width+x)*4;if(Math.max(pixels[at],pixels[at+1],pixels[at+2])<100)dark++}
+     if(dark/(right-left+1)>.9){divider=row;break}
+    }
+    if(divider!==undefined){
+     let inkBottom=Math.floor(baseRow)-5;
+     for(let row=Math.max(0,Math.floor(baseRow)-4);row<divider;row++)for(const link of line.links){
+      for(let x=Math.floor(link.rect[0]);x<=Math.ceil(link.rect[2]);x++){const at=(row*canvas.width+x)*4;if(Math.min(pixels[at],pixels[at+1],pixels[at+2])<180)inkBottom=Math.max(inkBottom,row)}
+     }
+     const start=Math.max(Math.floor(baseRow),inkBottom+1),middle=(inkBottom+1+divider)/2;
+     candidates=Array.from({length:Math.max(0,divider-start)},(_,i)=>start+i).sort((a,b)=>Math.abs(a+.5-middle)-Math.abs(b+.5-middle)||a-b);
+    }
+   }
    // A light pixel can be the antialiased edge of a black glyph. Reject dark
    // dips below the row's background, while allowing white/gray title-bar edges.
-   for(let row=Math.ceil(baseRow);row<=Math.floor(baseRow+4);row++){
+   for(const row of candidates){
     let clear=row>=0&&row<canvas.height;
     for(const link of line.links){
      const [left,,right]=link.rect,low=[255,255,255],samples=[[],[],[]];

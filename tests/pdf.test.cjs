@@ -367,6 +367,20 @@ test('NOTAM underline layout skips light antialiased glyph edges instead of trea
  assert.equal(other.underlineY,link.underlineY,'codes on the same line use one safe underline height');
 });
 
+test('NOTAM 1 header underlines sit between airport codes and the black divider',async()=>{
+ const {api,document}=app();let blocked=false;
+ const source={getViewport:()=>({width:100,height:100,convertToViewportPoint:(x,y)=>[x,100-y],convertToPdfPoint:(x,y)=>[x,100-y]}),cleanup(){},render({canvasContext:ctx}){
+  ctx.fillStyle='white';ctx.fillRect(0,0,100,100);ctx.fillStyle='black';
+  ctx.fillRect(20,60,20,blocked?3:1);ctx.fillRect(60,60,20,blocked?3:1);ctx.fillRect(10,63,80,1);
+  return {promise:Promise.resolve()};
+ }};
+ const links=[20,60].map(x=>({page:0,rect:[x,36.3,x+20,48.8],notam1Header:true}));
+ await api.layoutNotamUnderlines({getPage:async()=>source},links,document);
+ assert.equal(links[0].underlineY,38.5);assert.equal(links[1].underlineY,38.5);
+ assert.ok(links[0].underlineY<38.8&&links[0].underlineY>37,'between baseline and divider');
+ blocked=true;await assert.rejects(api.layoutNotamUnderlines({getPage:async()=>source},links,document),/여백/);
+});
+
 test('NOTAM underlines allow light gray backgrounds but reject dark content and other colors',async()=>{
  const {document}=app(),edits=[{page:0,rect:[19,49,81,51],kind:'notamUnderline'}];
  async function check(dark,color){
