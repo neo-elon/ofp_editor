@@ -104,13 +104,21 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
   const masks=marks.map(m=>{const r=first.viewport.convertToViewportRectangle(m.rect);return [Math.floor(Math.min(r[0],r[2])),Math.floor(Math.min(r[1],r[3])),Math.ceil(Math.max(r[0],r[2])),Math.ceil(Math.max(r[1],r[3]))]});
   // Union rectangles once instead of searching every rectangle at every pixel.
   const mask=masks.length?new Uint8Array(x.width*x.height):null;
+  const hasUnderlines=marks.some(mark=>mark.kind==='notamUnderline');
   for(const [i,[left,top,right,bottom]] of masks.entries())for(let row=Math.max(0,top);row<=Math.min(x.height-1,bottom);row++){
    const start=Math.max(0,left),end=Math.min(x.width-1,right);
-   if(start<=end)for(let column=start;column<=end;column++)mask[row*x.width+column]|=marks[i].kind==='notamUnderline'?2:1;
+   if(start<=end){
+    const offset=row*x.width;
+    if(!hasUnderlines)mask.fill(1,offset+start,offset+end+1);
+    else for(let column=start;column<=end;column++)mask[offset+column]|=marks[i].kind==='notamUnderline'?2:1;
+   }
   }
   const oldPixels=new Uint32Array(x.data.buffer,x.data.byteOffset,x.data.byteLength/4),newPixels=new Uint32Array(y.data.buffer,y.data.byteOffset,y.data.byteLength/4);
   for(let pixel=0;pixel<oldPixels.length;pixel++){
-   const offset=pixel*4,masked=mask&&mask[pixel];
+   const masked=mask&&mask[pixel];
+   // Regular edit regions still require a white background even if unchanged.
+   if(oldPixels[pixel]===newPixels[pixel]&&(!masked||masked===2))continue;
+   const offset=pixel*4;
    const r=x.data[offset],g=x.data[offset+1],b=x.data[offset+2];
    // NOTAM title bars have a light gray background. Underlines may cover that
    // background only; dark text, colored content and all other edits stay protected.

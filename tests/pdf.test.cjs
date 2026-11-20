@@ -54,6 +54,15 @@ test('browser safety asset URL tracks its content and exports the required white
  assert.equal(typeof context.OFPSafety.whitespace,'function');
 });
 
+test('PDF readers own independent input buffers for ArrayBuffer and typed-array views',()=>{
+ const {api}=app();
+ for(const input of [new Uint8Array([1,2,3]).buffer,new Uint8Array([9,1,2,3,9]).subarray(1,4)]){
+  let data;const token={};assert.equal(api.openPDF({getDocument:options=>{data=options.data;return token}},input),token);
+  assert.deepEqual([...data],[1,2,3]);assert.notEqual(data.buffer,input.buffer||input);
+  data.fill(0);assert.deepEqual([...new Uint8Array(input)],[1,2,3]);
+ }
+});
+
 test('stale safety asset stops before reading the PDF and shows a refresh instruction',async()=>{
  let reads=0;
  const ui=app(browserPdfjs,{...safety,whitespace:undefined});
@@ -339,6 +348,20 @@ test('NOTAM subsection titles use actual ICAO headings and ignore package summar
  assert.deepEqual([...overview.get('Notam 1')],[['DEST : KSFO',1],['ALTN : KOAK',1],['SECY',2]]);
 });
 
+test('NOTAM navigation reuses extracted geometry while retaining rotation checks',async()=>{
+ const doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Courier);
+ for(let i=0;i<3;i++)doc.addPage([600,800]);
+ for(const [p,lines]of [[0,['KOREAN AIR NOTAM PACKAGE 1','FLIGHT','DEP: RKSI']],[1,['[DEP]RKSI/ ICN']],[2,['NORMAL PAGE']]])lines.forEach((s,i)=>doc.getPage(p).drawText(s,{x:30,y:750-i*20,size:10,font}));
+ await inspect(await doc.save(),async read=>{
+  const {api}=app(),cache=new Map(),texts={};let calls=0;
+  for(let p=0;p<3;p++){const page=await read.getPage(p+1),getText=page.getTextContent.bind(page);page.getTextContent=(...args)=>{calls++;return getText(...args)};texts[p]=await api.readLines(read,p,cache)}
+  assert.equal(cache.size,2);assert.equal(cache.has(2),false);
+  const groups=api.notamSections(texts),links=await api.notamLinks(read,texts,groups,cache);
+  assert.equal(links.length,2);assert.equal(calls,3,'link creation must not extract page text again');
+  await assert.rejects(api.notamLinks({getPage:async()=>({rotate:90})},texts,groups,cache),/회전/);
+ });
+});
+
 test('NOTAM header airport links round trip to explicit headings and preserve existing annotations',async()=>{
  const doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Courier);
  for(let i=0;i<4;i++)doc.addPage([600,800]);
@@ -538,6 +561,14 @@ test('verification keeps the gap between separate allowed edit regions protected
   changed.getPage(0).drawRectangle({x:160,y:800,width:10,height:5,color:lib.rgb(1,0,0)});
   await inspect(await changed.save(),async after=>{await assert.rejects(safety.verify(before,after,{document,edits}),/표시 영역 밖/)});
  });
+});
+
+test('unchanged pixels in regular edit regions still require a white background',async()=>{
+ const doc=await lib.PDFDocument.create(),page=doc.addPage([100,100]);page.drawRectangle({x:10,y:10,width:20,height:20,color:lib.rgb(0,0,0)});
+ const bytes=await doc.save(),{document}=app();
+ await inspect(bytes,async before=>inspect(bytes,async after=>{
+  await assert.rejects(safety.verify(before,after,{document,edits:[{page:0,rect:[10,10,30,30]}]}),/기존 내용/);
+ }));
 });
 
 test('cached original fingerprints avoid re-rendering while changed output still blocks download',async()=>{
