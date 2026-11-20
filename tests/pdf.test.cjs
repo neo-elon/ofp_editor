@@ -357,13 +357,14 @@ test('NOTAM header airport links round trip to explicit headings and preserve ex
 });
 
 test('NOTAM underline layout skips light antialiased glyph edges instead of treating them as background',async()=>{
- const {api,document}=app(),link={page:0,rect:[20,37.5,80,50]};
+ const {api,document}=app(),link={page:0,rect:[20,37.5,50,50]},other={page:0,rect:[60,37.5,80,50]};
  const source={getViewport:()=>({width:100,height:100,convertToViewportPoint:(x,y)=>[x,100-y],convertToPdfPoint:(x,y)=>[x,100-y]}),cleanup(){},render({canvasContext:ctx}){
   ctx.fillStyle='white';ctx.fillRect(0,0,100,100);ctx.fillStyle='rgb(200,200,200)';ctx.fillRect(19,60,63,1);
   ctx.fillStyle='rgb(181,181,181)';ctx.fillRect(40,60,1,1);return {promise:Promise.resolve()};
  }};
- await api.layoutNotamUnderlines({getPage:async()=>source},[link],document);
+ await api.layoutNotamUnderlines({getPage:async()=>source},[link,other],document);
  assert.equal(link.underlineY,38.5,'skip row 60 despite every pixel being brighter than 180');
+ assert.equal(other.underlineY,link.underlineY,'codes on the same line use one safe underline height');
 });
 
 test('NOTAM underlines allow light gray backgrounds but reject dark content and other colors',async()=>{

@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.8</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.9</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -286,20 +286,29 @@ async function layoutNotamUnderlines(read,links,document){
   canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const context=canvas.getContext('2d');
   await source.render({canvasContext:context,viewport}).promise;
   const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
+  const lines=new Map();
   for(const link of links.filter(link=>link.page===pageIndex)){
-   const [left,bottom,right,top]=link.rect,baseline=bottom+(top-bottom)/5,baseRow=viewport.convertToViewportPoint(0,baseline)[1];let chosen;
+   const [,bottom,,top]=link.rect,baseline=bottom+(top-bottom)/5,key=baseline.toFixed(2);
+   if(!lines.has(key))lines.set(key,{baseline,links:[]});lines.get(key).links.push(link);
+  }
+  for(const line of lines.values()){
+   const baseRow=viewport.convertToViewportPoint(0,line.baseline)[1];let chosen;
    // A light pixel can be the antialiased edge of a black glyph. Reject dark
    // dips below the row's background, while allowing white/gray title-bar edges.
    for(let row=Math.ceil(baseRow);row<=Math.floor(baseRow+4);row++){
-    let clear=row>=0&&row<canvas.height;const low=[255,255,255],samples=[[],[],[]];
-    for(let x=Math.floor(left-.4);clear&&x<=Math.ceil(right+.4);x++){
-     const at=(row*canvas.width+x)*4,r=pixels[at];clear=x>=0&&x<canvas.width&&Math.min(r,pixels[at+1],pixels[at+2])>=180&&Math.max(r,pixels[at+1],pixels[at+2])-Math.min(r,pixels[at+1],pixels[at+2])<=4;
-     for(let channel=0;channel<3;channel++){low[channel]=Math.min(low[channel],pixels[at+channel]);samples[channel].push(pixels[at+channel])}
+    let clear=row>=0&&row<canvas.height;
+    for(const link of line.links){
+     const [left,,right]=link.rect,low=[255,255,255],samples=[[],[],[]];
+     for(let x=Math.floor(left-.4);clear&&x<=Math.ceil(right+.4);x++){
+      const at=(row*canvas.width+x)*4,r=pixels[at];clear=x>=0&&x<canvas.width&&Math.min(r,pixels[at+1],pixels[at+2])>=180&&Math.max(r,pixels[at+1],pixels[at+2])-Math.min(r,pixels[at+1],pixels[at+2])<=4;
+      for(let channel=0;channel<3;channel++){low[channel]=Math.min(low[channel],pixels[at+channel]);samples[channel].push(pixels[at+channel])}
+     }
+     if(clear)for(let channel=0;channel<3;channel++){const values=samples[channel].sort((a,b)=>a-b);if(low[channel]<values[Math.floor(values.length/2)]-4)clear=false}
     }
-    if(clear)for(let channel=0;channel<3;channel++){const values=samples[channel].sort((a,b)=>a-b);if(low[channel]<values[Math.floor(values.length/2)]-4)clear=false}
     if(clear){chosen=viewport.convertToPdfPoint(0,row+.5)[1];break}
    }
-   if(chosen===undefined)abort('NOTAM 링크 아래에 밑줄을 넣을 여백이 없습니다: '+(pageIndex+1)+'페이지, x='+left);link.underlineY=chosen;
+   if(chosen===undefined)abort('NOTAM 링크 아래에 밑줄을 넣을 여백이 없습니다: '+(pageIndex+1)+'페이지');
+   for(const link of line.links)link.underlineY=chosen;
   }
   canvas.width=canvas.height=0;source.cleanup();
  }
