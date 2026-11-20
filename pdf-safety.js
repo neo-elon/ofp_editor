@@ -106,7 +106,7 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
   const mask=masks.length?new Uint8Array(x.width*x.height):null;
   for(const [i,[left,top,right,bottom]] of masks.entries())for(let row=Math.max(0,top);row<=Math.min(x.height-1,bottom);row++){
    const start=Math.max(0,left),end=Math.min(x.width-1,right);
-   if(start<=end)for(let column=start;column<=end;column++)mask[row*x.width+column]|=marks[i].kind==='notamUnderline'?2:1;
+   if(start<=end)for(let column=start;column<=end;column++)mask[row*x.width+column]|=marks[i].kind==='notam1HeaderUnderline'?4:marks[i].kind==='notamUnderline'?2:1;
   }
   const oldPixels=new Uint32Array(x.data.buffer,x.data.byteOffset,x.data.byteLength/4),newPixels=new Uint32Array(y.data.buffer,y.data.byteOffset,y.data.byteLength/4);
   for(let pixel=0;pixel<oldPixels.length;pixel++){
@@ -114,10 +114,18 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
    const r=x.data[offset],g=x.data[offset+1],b=x.data[offset+2];
    // NOTAM title bars have a light gray background. Underlines may cover that
    // background only; dark text, colored content and all other edits stay protected.
-   const underline=masked===2;
-   if(masked&&(!underline||oldPixels[pixel]!==newPixels[pixel])&&(underline?!(Math.min(r,g,b)>=180&&Math.max(r,g,b)-Math.min(r,g,b)<=4):(r!==255||g!==255||b!==255)))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 겹쳐 쓰지 않고 다운로드를 중단합니다.');
+   const underline=masked===2,headerUnderline=masked===4;
+   if(masked&&!headerUnderline&&(!underline||oldPixels[pixel]!==newPixels[pixel])&&(underline?!(Math.min(r,g,b)>=180&&Math.max(r,g,b)-Math.min(r,g,b)<=4):(r!==255||g!==255||b!==255)))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 겹쳐 쓰지 않고 다운로드를 중단합니다.');
    if(oldPixels[pixel]===newPixels[pixel])continue;
    if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');
+   if(headerUnderline){
+    // Permit overlap, but only the blue underline (including antialiasing),
+    // never arbitrary changes or erasure inside the small recorded rectangle.
+    const original=[r,g,b],blue=[2,85,214];let channel=0;
+    for(let c=1;c<3;c++)if(Math.abs(blue[c]-original[c])>Math.abs(blue[channel]-original[channel]))channel=c;
+    const alpha=(y.data[offset+channel]-original[channel])/(blue[channel]-original[channel]);
+    if(!(alpha>0&&alpha<=1.02)||original.some((value,c)=>Math.abs(y.data[offset+c]-(value+alpha*(blue[c]-value)))>2))fail('검증 실패: NOTAM 1 헤더 밑줄 이외의 변경이 있습니다.');
+   }
    if(underline&&!(y.data[offset]<r&&y.data[offset+1]<=g&&y.data[offset+2]>=Math.min(b,214)-1&&y.data[offset+2]<=Math.max(b,214)+1&&y.data[offset+2]-y.data[offset]>b-r&&y.data[offset+2]-y.data[offset+1]>=b-g))fail('검증 실패: NOTAM 밑줄 색상 ('+[r,g,b]+' → '+Array.from(y.data.subarray(offset,offset+3))+').');
   }
   if(!cached){digest=digest||await pixelDigest(x);if(digest)snapshots.set(index,{text:oldText,width,height,digest})}

@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.12</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.13</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -44,7 +44,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=b6ee76fe61379f4f"></script>
+<script src="pdf-safety.js?v=02b183de9152105f"></script>
 <script>
 (function(){
 'use strict';
@@ -312,7 +312,9 @@ async function layoutNotamUnderlines(read,links,document){
    }
    // A light pixel can be the antialiased edge of a black glyph. Reject dark
    // dips below the row's background, while allowing white/gray title-bar edges.
-   for(const row of candidates){
+   // The user permits overlap only for NOTAM 1 header underlines.
+   if(line.links.every(link=>link.notam1Header))chosen=viewport.convertToPdfPoint(0,(candidates[0]??Math.floor(baseRow))+.5)[1];
+   for(const row of chosen===undefined?candidates:[]){
     let clear=row>=0&&row<canvas.height;
     for(const link of line.links){
      const [left,,right]=link.rect,low=[255,255,255],samples=[[],[],[]];
@@ -342,7 +344,7 @@ function addNotamLinks(doc,links,pageMap,lib,edits){
   // NOTAM 1 header gap, use a fill with explicit bounds instead of a stroke.
   if(link.notam1Header)page.drawRectangle({x:left,y:y-.2,width:right-left,height:.4,color:lib.rgb(...BLUE),borderWidth:0});
   else page.drawLine({start:{x:left,y},end:{x:right,y},thickness:.5,color:lib.rgb(...BLUE)});
-  edits.push({page:link.page,rect,kind:'notamUnderline'});
+  edits.push({page:link.page,rect,kind:link.notam1Header?'notam1HeaderUnderline':'notamUnderline'});
   page.node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:link.rect,Border:[0,0,0],BS:{Type:'Border',W:0},NM:lib.PDFString.of('OFP-NOTAM-'+index),Dest:[target.ref,'XYZ',link.x,link.y,null]})));
  }
 }

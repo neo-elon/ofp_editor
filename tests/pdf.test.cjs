@@ -372,13 +372,16 @@ test('NOTAM 1 header underlines sit between airport codes and the black divider'
  const source={getViewport:()=>({width:100,height:100,convertToViewportPoint:(x,y)=>[x,100-y],convertToPdfPoint:(x,y)=>[x,100-y]}),cleanup(){},render({canvasContext:ctx}){
   ctx.fillStyle='white';ctx.fillRect(0,0,100,100);ctx.fillStyle='black';
   ctx.fillRect(20,60,20,blocked?3:1);ctx.fillRect(60,60,20,blocked?3:1);ctx.fillRect(10,63,80,1);
+  if(blocked)ctx.fillRect(10,64,80,2);
   return {promise:Promise.resolve()};
  }};
  const links=[20,60].map(x=>({page:0,rect:[x,36.3,x+20,48.8],notam1Header:true}));
  await api.layoutNotamUnderlines({getPage:async()=>source},links,document);
  assert.equal(links[0].underlineY,38.5);assert.equal(links[1].underlineY,38.5);
  assert.ok(links[0].underlineY<38.8&&links[0].underlineY>37,'between baseline and divider');
- blocked=true;await assert.rejects(api.layoutNotamUnderlines({getPage:async()=>source},links,document),/여백/);
+ blocked=true;await api.layoutNotamUnderlines({getPage:async()=>source},links,document);
+ assert.equal(links[0].underlineY,links[1].underlineY,'NOTAM 1 header overlap is permitted');
+ await assert.rejects(api.layoutNotamUnderlines({getPage:async()=>source},links.map(link=>({...link,notam1Header:false})),document),/여백/);
 });
 
 test('NOTAM 1 header underlines use bounded fills, never minimum-pixel strokes',async()=>{
@@ -396,8 +399,25 @@ test('NOTAM 1 header underlines use bounded fills, never minimum-pixel strokes',
  const stroked=await lib.PDFDocument.load(before);
  stroked.getPage(0).drawLine({start:{x:20,y:50.4},end:{x:80,y:50.4},thickness:.5,color:lib.rgb(2/255,85/255,214/255)});
  await inspect(before,async source=>inspect(await stroked.save(),async output=>{
-  await assert.rejects(safety.verify(source,output,{document,edits}),/기존 내용/);
+  await assert.rejects(safety.verify(source,output,{document,edits:edits.map(edit=>({...edit,kind:'notamUnderline'}))}),/기존 내용/);
  }));
+});
+
+test('only NOTAM 1 header regions allow a blue underline over original dark content',async()=>{
+ const {document}=app(),source=await lib.PDFDocument.create(),page=source.addPage([100,100]);
+ page.drawRectangle({x:15,y:49,width:70,height:3,color:lib.rgb(0,0,0),borderWidth:0});const bytes=await source.save();
+ async function check(kind,color,outside=false){
+  const doc=await lib.PDFDocument.load(bytes);doc.getPage(0).drawRectangle({x:20,y:50.2,width:60,height:.4,color,borderWidth:0});
+  if(outside)doc.getPage(0).drawRectangle({x:10,y:10,width:3,height:3,color,borderWidth:0});
+  return inspect(bytes,async before=>inspect(await doc.save(),async after=>safety.verify(before,after,{document,edits:[{page:0,rect:[19.5,50,80.5,51],kind}]})));
+ }
+ const blue=lib.rgb(2/255,85/255,214/255);
+ await check('notam1HeaderUnderline',blue);
+ await assert.rejects(check('notamUnderline',blue),/기존 내용/);
+ await assert.rejects(check(undefined,blue),/기존 내용/);
+ await assert.rejects(check('notam1HeaderUnderline',lib.rgb(1,0,0)),/밑줄 이외/);
+ await assert.rejects(check('notam1HeaderUnderline',lib.rgb(1,1,1)),/밑줄 이외/);
+ await assert.rejects(check('notam1HeaderUnderline',blue,true),/표시 영역 밖/);
 });
 
 test('NOTAM underlines allow light gray backgrounds but reject dark content and other colors',async()=>{
