@@ -230,10 +230,15 @@ function findATS(texts,cfp,flightInfo){
   if(!header||header.match(/^\(FPL-([A-Z0-9]+)-IS/)[1]!==cfp.flight)continue;
   if(flightInfo!==undefined&&page>=flightInfo)continue;
   try{parseATS(lines,cfp.dest)}catch(e){continue}
-  candidates.push({page,standalone:lines[0]===header});
+  const routeStart=lines.findIndex(line=>/^-N\d{4}[A-Z]\d{3}\b/.test(line));
+  const departure=lines.slice(lines.indexOf(header)+1,routeStart).map(line=>line.match(/^-([A-Z]{4})(\d{4})\b/)).find(Boolean);
+  // The destination also starts with -ICAOhhmm: only read departure before Item 15.
+  if(departure&&departure[1]!==cfp.origin)continue;
+  candidates.push({page,submitted:/\bCOPY\s+OF\s+ATS\s+FPL\b/i.test(lines.join(' ')),standalone:lines[0]===header});
  }
- const standalone=candidates.filter(c=>c.standalone),selected=standalone.length?standalone:candidates;
- if(selected.length!==1)abort(selected.length?'ATS FLIGHT PLAN 후보가 여러 개여서 수정 위치를 확정하지 못했습니다.':'ATS FLIGHT PLAN 페이지를 찾지 못했습니다.');
+ const submitted=candidates.filter(c=>c.submitted),standalone=candidates.filter(c=>c.standalone);
+ const selected=submitted.length?submitted:standalone.length?standalone:candidates;
+ if(selected.length!==1)abort(selected.length?'ATS FLIGHT PLAN 후보가 여러 개여서 수정 위치를 확정하지 못했습니다. 후보 페이지: '+selected.map(item=>item.page+1).join(', ')+'. 원본 PDF에서 제출용 ATS 페이지를 확인해야 합니다.':'CFP 편명·출발지·목적지에 맞는 ATS FLIGHT PLAN 페이지를 찾지 못했습니다.');
  return selected[0].page;
 }
 function openPDF(pdfjs,bytes){return pdfjs.getDocument({data:new Uint8Array(bytes).slice(),isEvalSupported:false,cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'})}
