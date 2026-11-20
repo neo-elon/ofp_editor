@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.10</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.11</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -44,7 +44,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=b6ee76fe61379f4f"></script>
+<script src="pdf-safety.js?v=3e1fc1f68ab34f33"></script>
 <script>
 (function(){
 'use strict';
@@ -70,10 +70,13 @@ function textRows(items){
  for(const row of rows){row.items.sort((a,b)=>a.transform[4]-b.transform[4]);row.text=row.items.map(t=>t.str).join(' ').replace(/\s+/g,' ').trim()}
  return rows;
 }
-async function readLines(doc,n){
+async function readLines(doc,n,rowsCache){
  if(!validPage(n,doc.numPages))abort('PDF 페이지 범위를 벗어났습니다: '+n+' / '+doc.numPages);
  const page=await doc.getPage(n+1);
- return textRows((await page.getTextContent()).items).map(row=>row.text);
+ const rows=textRows((await page.getTextContent()).items);
+ // Retain geometry only for pages used again by NOTAM links or DISC placement.
+ if(rowsCache&&rows.some(row=>/^(?:KOREAN\s+AIR\s+NOTAM\s+PACKAGE|\[|SECY\b)/i.test(row.text)||/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.text)))rowsCache.set(n,rows);
+ return rows.map(row=>row.text);
 }
 function parseCFP(lines){
  const t=lines.join('\n'),plan=(t.match(/CFP\s+PLAN\s+(\d+)/i)||[])[1];
@@ -123,8 +126,8 @@ function wrap(route,font,size,max,checked){
  return lines;
 }
 function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,size)}
-async function discLayout(page,text,font){
- const matches=textRows((await page.getTextContent()).items).filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.text));
+async function discLayout(page,text,font,rows){
+ const matches=(rows||textRows((await page.getTextContent()).items)).filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.text));
  if(matches.length!==1)abort('DISC FUEL DUE TO 문구가 있는 줄을 확정하지 못했습니다. 임의 위치에 DISC를 표시하지 않습니다.');
  const row=matches[0],x=Math.max(...row.items.map(t=>t.transform[4]+t.width))+10;
  for(let size=10;size>=6;size-=.5)if(x+textWidth(font,text,size)+2<=page.view[2])return {x,y:row.y,size};
@@ -172,8 +175,9 @@ function drawRoute(page,route,result,font,lib,layout={size:10,top:17,leading:11.
  if(result.match){const i=lines.length-1,last=lines[i];page.drawText('(Checked)',{x:25+textWidth(font,last,size)+5,y:h-top-leading*i,size,font,color:lib.rgb(...BLUE)})}
 }
 function addBookmarks(doc,items,lib){
- if(!items.length)return;
- for(const item of flattenBookmarks(items))if(!validPage(item.page,doc.getPageCount()))abort('북마크 페이지 범위 오류: '+item.title);
+ if(!items.length)return 0;
+ const flat=flattenBookmarks(items);
+ for(const item of flat)if(!validPage(item.page,doc.getPageCount()))abort('북마크 페이지 범위 오류: '+item.title);
  const ctx=doc.context,N=lib.PDFName,H=lib.PDFHexString,root=ctx.obj({Type:N.of('Outlines')}),rootRef=ctx.register(root);
  function writeLevel(list,parent,parentRef){
   const refs=list.map(()=>ctx.nextRef());let count=0;
@@ -186,6 +190,7 @@ function addBookmarks(doc,items,lib){
   parent.set(N.of('First'),refs[0]);parent.set(N.of('Last'),refs[refs.length-1]);parent.set(N.of('Count'),ctx.obj(count));return count;
  }
  writeLevel(items,root,rootRef);doc.catalog.set(N.of('Outlines'),rootRef);doc.catalog.set(N.of('PageMode'),N.of('UseOutlines'));
+ return flat.length;
 }
 function flattenBookmarks(items){return items.flatMap(item=>[item,...flattenBookmarks(item.children||[])])}
 function weatherChart(lines){
@@ -253,9 +258,9 @@ function rowRect(row,start,end){
  if(!boxes.length)abort('NOTAM 링크 영역을 확인하지 못했습니다.');
  return [Math.min(...boxes.map(b=>b[0])),Math.min(...boxes.map(b=>b[1])),Math.max(...boxes.map(b=>b[2])),Math.max(...boxes.map(b=>b[3]))];
 }
-async function notamLinks(read,texts){
- const links=[],groups=notamSections(texts),cache=new Map();
- async function rows(page){if(!cache.has(page)){const source=await read.getPage(page+1);if(source.rotate!==0)abort('NOTAM 링크 대상 페이지의 회전을 지원하지 않습니다.');cache.set(page,textRows((await source.getTextContent()).items))}return cache.get(page)}
+async function notamLinks(read,texts,groups=notamSections(texts),cache=new Map()){
+ const links=[];
+ async function rows(page){const source=await read.getPage(page+1);if(source.rotate!==0)abort('NOTAM 링크 대상 페이지의 회전을 지원하지 않습니다.');if(!cache.has(page))cache.set(page,textRows((await source.getTextContent()).items));return cache.get(page)}
  for(const [packageTitle,children] of groups){
   const header=Object.keys(texts).map(Number).find(page=>texts[page].some(line=>line.trim()===('KOREAN AIR NOTAM PACKAGE '+packageTitle.slice(-1))));
   if(header===undefined)continue;
@@ -281,13 +286,14 @@ async function notamLinks(read,texts){
  return links;
 }
 async function layoutNotamUnderlines(read,links,document){
- for(const pageIndex of new Set(links.map(link=>link.page))){
+ const byPage=new Map();for(const link of links){if(!byPage.has(link.page))byPage.set(link.page,[]);byPage.get(link.page).push(link)}
+ for(const [pageIndex,pageLinks] of byPage){
   const source=await read.getPage(pageIndex+1),viewport=source.getViewport({scale:1}),canvas=document.createElement('canvas');
   canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);const context=canvas.getContext('2d');
   await source.render({canvasContext:context,viewport}).promise;
   const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
   const lines=new Map();
-  for(const link of links.filter(link=>link.page===pageIndex)){
+  for(const link of pageLinks){
    const [,bottom,,top]=link.rect,baseline=bottom+(top-bottom)/5,key=baseline.toFixed(2);
    if(!lines.has(key))lines.set(key,{baseline,links:[]});lines.get(key).links.push(link);
   }
@@ -413,7 +419,11 @@ function findATS(texts,cfp,flightInfo){
  if(selected.length!==1)abort(selected.length?'ATS FLIGHT PLAN 후보가 여러 개여서 수정 위치를 확정하지 못했습니다. 후보 페이지: '+selected.map(item=>item.page+1).join(', ')+'. 원본 PDF에서 제출용 ATS 페이지를 확인해야 합니다.':'CFP 편명·출발지·목적지에 맞는 ATS FLIGHT PLAN 페이지를 찾지 못했습니다.');
  return selected[0].page;
 }
-function openPDF(pdfjs,bytes){return pdfjs.getDocument({data:new Uint8Array(bytes).slice(),isEvalSupported:false,cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'})}
+function openPDF(pdfjs,bytes){
+ // PDF.js may transfer/detach its input buffer. Make one owned copy per reader.
+ const data=bytes instanceof ArrayBuffer?new Uint8Array(bytes.slice(0)):Uint8Array.from(bytes);
+ return pdfjs.getDocument({data,isEvalSupported:false,cMapUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',cMapPacked:true,standardFontDataUrl:'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/'})
+}
 async function run(file){
  if(busy)return;
  if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf'){message('PDF 파일을 선택하세요.','error');return}
@@ -439,10 +449,10 @@ async function run(file){
   }
   const outline=await readOutline(read);
   pct(18);message('CFP / ATS Route 및 페이지 구성을 분석 중입니다...');
-  const sections={},texts={};let atsPage=-1,flightInfo=outline.FlightInfo,ocean=outline.OceanicTracks;
+  const sections={},texts={},rowsCache=new Map();let flightInfo=outline.FlightInfo;const ocean=outline.OceanicTracks;
   for(let start=0;start<read.numPages;start+=7){
    const batch=Array.from({length:Math.min(7,read.numPages-start)},(_,i)=>start+i);
-   const linesBatch=await Promise.all(batch.map(i=>readLines(read,i)));
+   const linesBatch=await Promise.all(batch.map(i=>readLines(read,i,rowsCache)));
    // Apply detections in document order, independent of text extraction completion order.
    batch.forEach((i,offset)=>{
     const lines=linesBatch[offset],t=lines.join('\n');texts[i]=lines;
@@ -453,7 +463,7 @@ async function run(file){
   }
   const {page:cfpPage,cfp}=findCFP(texts,outline.FlightPlan);sections.FlightPlan=cfpPage;
   if(flightInfo===undefined)for(let i=cfpPage+16;i<read.numPages;i++)if(/CFP\s+PLAN\s+\d+/i.test(texts[i].join('\n'))){flightInfo=i;break}
-  atsPage=findATS(texts,cfp,flightInfo);
+  const atsPage=findATS(texts,cfp,flightInfo);
   // Only inspect the primary CFP, excluding later FlightInfo copies and fuel summary rows.
   const flightEnd=atsPage>cfpPage?atsPage:flightInfo??read.numPages;
   for(let i=cfpPage;i<flightEnd;i++)for(const title of flightPlanSections(texts[i]))if(sections[title]===undefined)sections[title]=i;
@@ -470,7 +480,7 @@ async function run(file){
    const candidates=Object.keys(texts).map(Number).filter(i=>texts[i].some(line=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(line)));
    const discPage=candidates.includes(atsPage+2)?atsPage+2:candidates.length===1?candidates[0]:undefined;
    if(discPage===undefined)abort('DISC FUEL DUE TO 문구가 있는 페이지를 확정하지 못했습니다.');
-   const source=await read.getPage(discPage+1),text='DISC '+cfp.disc,position=await discLayout(source,text,font);
+   const source=await read.getPage(discPage+1),text='DISC '+cfp.disc,position=await discLayout(source,text,font,rowsCache.get(discPage));
    const clear=await safety.whitespace(source,document),{x,y,size}=position;
    if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))abort('DISC 표시 위치에 기존 내용이 있어 처리를 중단했습니다.');
    (await editable(discPage)).drawText(text,{...position,font,color:lib.rgb(...BLUE)});
@@ -485,13 +495,14 @@ async function run(file){
   if(weather)weather.children=['WindTemp','SIGWX','ASC(TURB)','Cross Chart'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   const flightPlan=bookmarks.find(item=>item.title==='FlightPlan');
   flightPlan.children=['3% Contingency','EDTO','Refile'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
-  for(const [title,children] of notamSections(texts)){
+  const notams=notamSections(texts);
+  for(const [title,children] of notams){
    const parent=bookmarks.find(item=>item.title===title);
    if(parent)parent.children=Array.from(children,([title,source])=>({title,page:pageMap[source]}));
   }
-  const navigation=await notamLinks(read,texts);await layoutNotamUnderlines(read,navigation,document);addNotamLinks(doc,navigation,pageMap,lib,edits);
-  const allBookmarks=flattenBookmarks(bookmarks);
-  addBookmarks(doc,bookmarks,lib);pct(80);
+  const navigation=await notamLinks(read,texts,notams,rowsCache);rowsCache.clear();
+  await layoutNotamUnderlines(read,navigation,document);addNotamLinks(doc,navigation,pageMap,lib,edits);
+  const bookmarkCount=addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
   const outputTask=openPDF(pdfjs,output);tasks.push(outputTask);const outputRead=await outputTask.promise;
   await safety.verify(originalRead,outputRead,{document,edits,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
@@ -499,7 +510,7 @@ async function run(file){
   await verifyNotamLinks(outputRead,navigation,pageMap);
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);
-  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+allBookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
+  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+bookmarkCount+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
  }catch(e){progress.style.display='none';message('처리 중단: '+(e.message||String(e))+'\n검증을 통과하지 못해 다운로드하지 않습니다. 원본 PDF는 변경되지 않았습니다.','error');console.error(e)}finally{for(const task of tasks)try{await task.destroy()}catch(e){console.warn('PDF worker 정리 실패',e)}busy=false;choose.disabled=false}
 }
 })();
