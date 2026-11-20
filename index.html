@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.4</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.5</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -38,6 +38,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 <li>CFP/ATS Route를 비교해 일치하면 (Checked)를 표시하고, 불일치 구간은 빨간 밑줄로 표시합니다.</li>
 <li>CFP Route, DISC, ETD/ETA 등 필요한 표시를 PDF에 추가합니다.</li>
 <li>Flight Plan, Weather Briefing, NOTAM과 하위 항목의 책갈피를 만듭니다.</li>
+<li>NOTAM 헤더의 공항 코드를 누르면 본문으로 이동하고, 본문 제목의 코드를 누르면 헤더로 돌아옵니다.</li>
 <li>원본과 결과를 대조한 뒤 정해진 파일명으로 저장하며, 검증에 실패하면 다운로드를 중단합니다.</li>
 </ul></section>
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
@@ -236,6 +237,64 @@ function notamSections(texts){
  }
  return groups;
 }
+function rowRect(row,start,end){
+ // textRows collapses whitespace; recover offsets in the original PDF text items.
+ const raw=row.items.map(item=>item.str).join(' '),positions=[];
+ for(const word of raw.matchAll(/\S+/g)){if(positions.length)positions.push(word.index-1);for(let i=0;i<word[0].length;i++)positions.push(word.index+i)}
+ start=positions[start];end=positions[end-1]+1;
+ let offset=0;const boxes=[];
+ for(const item of row.items){
+  const left=Math.max(0,start-offset),right=Math.min(item.str.length,end-offset);
+  if(right>left){const [a,b,c,d,x,y]=item.transform,h=Math.hypot(c,d)||item.height;
+   if(Math.abs(b)>.01||Math.abs(c)>.01||a<=0||d<=0)abort('NOTAM 링크 대상 텍스트의 회전을 지원하지 않습니다.');
+   boxes.push([x+item.width*left/item.str.length,y-h*.25,x+item.width*right/item.str.length,y+h]);
+  }offset+=item.str.length+1;
+ }
+ if(!boxes.length)abort('NOTAM 링크 영역을 확인하지 못했습니다.');
+ return [Math.min(...boxes.map(b=>b[0])),Math.min(...boxes.map(b=>b[1])),Math.max(...boxes.map(b=>b[2])),Math.max(...boxes.map(b=>b[3]))];
+}
+async function notamLinks(read,texts){
+ const links=[],groups=notamSections(texts),cache=new Map();
+ async function rows(page){if(!cache.has(page)){const source=await read.getPage(page+1);if(source.rotate!==0)abort('NOTAM 링크 대상 페이지의 회전을 지원하지 않습니다.');cache.set(page,textRows((await source.getTextContent()).items))}return cache.get(page)}
+ for(const [packageTitle,children] of groups){
+  const header=Object.keys(texts).map(Number).find(page=>texts[page].some(line=>line.trim()===('KOREAN AIR NOTAM PACKAGE '+packageTitle.slice(-1))));
+  if(header===undefined)continue;
+  const headerRows=await rows(header),bodyStart=headerRows.findIndex(row=>/^\[/.test(row.text)||/^SECY\s*\/\s*SECURITY/i.test(row.text));
+  let role;const returned=new Set();
+  for(const row of headerRows.slice(2,bodyStart<0?headerRows.length:bodyStart)){
+   const tokens=new RegExp('('+NOTAM_ROLE+')\\s*[:：]|\\b(?!SECY\\b)([A-Z]{4})\\b|\\b(SECY)\\b','gi');let match;
+   while((match=tokens.exec(row.text))){
+    if(match[1]){role=match[1].toUpperCase().replace(/\s+/g,' ');continue}
+    const title=match[3]?'SECY':notamHeading('['+role+']'+match[2]),target=children.get(title);
+    if(target===undefined)continue;
+    const targetRows=await rows(target);
+    let heading=targetRows.find(r=>(/^\[/.test(r.text)||/^SECY\s*\/\s*SECURITY/i.test(r.text))&&notamHeading(r.text)===title);
+    if(!heading){const i=targetRows.findIndex((r,i)=>/^\[[^\]]+\]$/.test(r.text)&&notamHeading(r.text+' '+(targetRows[i+1]?.text||''))===title);if(i>=0)heading=targetRows[i+1]}
+    // Only create navigation when an explicit body heading confirms the target.
+    if(!heading)continue;
+    const rect=rowRect(row,match.index,match.index+match[0].length),code=match[3]||match[2],at=heading.text.indexOf(code),backRect=rowRect(heading,at<0?0:at,at<0?heading.text.length:at+code.length);
+    links.push({page:header,rect,target,x:backRect[0],y:backRect[3]+12});
+    if(!returned.has(title)){links.push({page:target,rect:backRect,target:header,x:rect[0],y:rect[3]+12});returned.add(title)}
+   }
+  }
+ }
+ return links;
+}
+function addNotamLinks(doc,links,pageMap,lib){
+ for(const [index,link] of links.entries()){
+  const page=doc.getPage(pageMap[link.page]),target=doc.getPage(pageMap[link.target]);
+  if(!link.rect.every(Number.isFinite)||link.rect[0]<0||link.rect[1]<0||link.rect[2]>page.getWidth()||link.rect[3]>page.getHeight())abort('NOTAM 링크 영역이 페이지 범위를 벗어났습니다.');
+  page.node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:link.rect,Border:[0,0,0],NM:lib.PDFString.of('OFP-NOTAM-'+index),Dest:[target.ref,'XYZ',link.x,link.y,null]})));
+ }
+}
+async function verifyNotamLinks(read,links,pageMap){
+ const pages=new Map();
+ for(const [index,link] of links.entries()){
+  const page=pageMap[link.page];if(!pages.has(page))pages.set(page,await (await read.getPage(page+1)).getAnnotations());
+  const annotation=pages.get(page).find(a=>a.id&&a.subtype==='Link'&&a.dest&&Array.isArray(a.dest)&&a.rect.every((v,i)=>Math.abs(v-link.rect[i])<.01)&&Math.abs(a.dest[2]-link.x)<.01&&Math.abs(a.dest[3]-link.y)<.01);
+  if(!annotation||await read.getPageIndex(annotation.dest[0])!==pageMap[link.target])abort('NOTAM 내부 링크 검증에 실패했습니다: '+(index+1));
+ }
+}
 async function outlinePage(doc,destination){
  const dest=typeof destination==='string'?await doc.getDestination(destination):destination;
  const target=dest&&dest[0];return Number.isInteger(target)?target:target?await doc.getPageIndex(target):undefined;
@@ -374,12 +433,14 @@ async function run(file){
    const parent=bookmarks.find(item=>item.title===title);
    if(parent)parent.children=Array.from(children,([title,source])=>({title,page:pageMap[source]}));
   }
+  const navigation=await notamLinks(read,texts);addNotamLinks(doc,navigation,pageMap,lib);
   const allBookmarks=flattenBookmarks(bookmarks);
   addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
   const outputTask=openPDF(pdfjs,output);tasks.push(outputTask);const outputRead=await outputTask.promise;
   await safety.verify(originalRead,outputRead,{document,edits,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
   await verifyBookmarks(outputRead,bookmarks,pageMap);
+  await verifyNotamLinks(outputRead,navigation,pageMap);
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);
   message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+allBookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');

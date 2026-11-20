@@ -339,6 +339,22 @@ test('NOTAM subsection titles use actual ICAO headings and ignore package summar
  assert.deepEqual([...overview.get('Notam 1')],[['DEST : KSFO',1],['ALTN : KOAK',1],['SECY',2]]);
 });
 
+test('NOTAM header airport links round trip to explicit headings and preserve existing annotations',async()=>{
+ const doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Courier);
+ for(let i=0;i<4;i++)doc.addPage([600,800]);
+ for(const [page,lines] of [[0,['KOREAN AIR NOTAM PACKAGE 2','KE 123 PRINTED AT 1230Z','ERA: RKSI KSFO','KOAK','REFILE: KSFO','[ERA]RKSI/ ICN']],[1,['[ERA]KSFO/ SFO']],[2,['[ERA]KOAK/ OAK','[REFILE]KSFO/ SFO','END OF KOREAN AIR NOTAM PACKAGE 2']],[3,['[ERA]KJFK/ outside']]])lines.forEach((s,i)=>doc.getPage(page).drawText(s,{x:30,y:750-i*20,size:10,font}));
+ doc.getPage(0).node.addAnnot(doc.context.register(doc.context.obj({Type:'Annot',Subtype:'Link',Rect:[10,10,20,20],Border:[0,0,0],A:{S:'URI',URI:lib.PDFString.of('https://example.com')}})));
+ const {api,document}=app(),bytes=await doc.save({useObjectStreams:false});let links;
+ await inspect(bytes,async read=>{const texts={};for(let i=0;i<read.numPages;i++)texts[i]=await api.readLines(read,i);links=await api.notamLinks(read,texts)});
+ assert.equal(links.length,8);assert.deepEqual(links.filter((_,i)=>i%2===0).map(l=>l.target),[0,1,2,2]);
+ api.addNotamLinks(doc,links,[0,1,2,3],lib);const output=await doc.save({useObjectStreams:false});
+ await inspect(bytes,async before=>inspect(output,async after=>{
+  await safety.verify(before,after,{document});await api.verifyNotamLinks(after,links,[0,1,2,3]);
+  assert.ok((await (await after.getPage(1)).getAnnotations()).some(a=>a.url==='https://example.com/'));
+  const wrong=links.map(l=>({...l,target:3}));await assert.rejects(api.verifyNotamLinks(after,wrong,[0,1,2,3]),/NOTAM/);
+ }));
+});
+
 test('NOTAM REFILE airports prefer body headings and stay inside their package',()=>{
  const {api}=app();
  for(const [heading,title] of [['[REFILE]KSFO/ SFO','REFILE : KSFO'],['REFILE : KOAK','REFILE : KOAK'],['[REFILE DEST]KSFO/ SFO','REFILE DEST : KSFO'],['[REFILE ALTN]KOAK/ OAK','REFILE ALTN : KOAK']])assert.equal(api.notamHeading(heading),title);
