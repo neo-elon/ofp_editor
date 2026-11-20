@@ -339,16 +339,24 @@ test('NOTAM subsection titles use actual ICAO headings and ignore package summar
  assert.deepEqual([...overview.get('Notam 1')],[['DEST : KSFO',1],['ALTN : KOAK',1],['SECY',2]]);
 });
 
+test('NOTAM REFILE airports prefer body headings and stay inside their package',()=>{
+ const {api}=app();
+ for(const [heading,title] of [['[REFILE]KSFO/ SFO','REFILE : KSFO'],['REFILE : KOAK','REFILE : KOAK'],['[REFILE DEST]KSFO/ SFO','REFILE DEST : KSFO'],['[REFILE ALTN]KOAK/ OAK','REFILE ALTN : KOAK']])assert.equal(api.notamHeading(heading),title);
+ for(const line of ['REFILE FLT PLAN KAL123','REFILE RES 0000 00.00','REFER TO REFILE : KSFO'])assert.equal(api.notamHeading(line),undefined);
+ const groups=api.notamSections({0:['KOREAN AIR NOTAM PACKAGE 2','REFILE : KSFO'],1:['[REFILE]KSFO/ SFO','[REFILE ALTN]','KOAK/ OAK'],2:['[REFILE]KSFO/ continued','END OF KOREAN AIR NOTAM PACKAGE 2'],3:['[REFILE]KJFK/ outside']});
+ assert.deepEqual([...groups.get('Notam 2')],[['REFILE : KSFO',1],['REFILE ALTN : KOAK',1]]);
+});
+
 test('NOTAM child bookmarks stay under their package even when titles repeat across packages',async()=>{
  const doc=await lib.PDFDocument.load(await fixture({pages:12})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
- for(const [page,lines] of [[5,['[DEP]RKSI/ ICN']],[6,['[DEST]KSFO/ SFO','[ALTN]KOAK/ OAK']],[7,['SECY / SECURITY INFORMATION']],[8,['KOREAN AIR NOTAM PACKAGE 2']],[9,['[DEP]RKSI/ ICN','[ERA]KSFO/ SFO','SECY / SECURITY INFORMATION']],[10,['KOREAN AIR NOTAM PACKAGE 3','[FIR]RKRR/ Incheon']],[11,['END OF KOREAN AIR NOTAM PACKAGE 3']]])lines.forEach((line,i)=>doc.getPage(page).drawText(line,{x:30,y:700-i*20,size:10,font}));
+ for(const [page,lines] of [[5,['[DEP]RKSI/ ICN']],[6,['[DEST]KSFO/ SFO','[ALTN]KOAK/ OAK']],[7,['SECY / SECURITY INFORMATION']],[8,['KOREAN AIR NOTAM PACKAGE 2']],[9,['[DEP]RKSI/ ICN','[ERA]KSFO/ SFO','SECY / SECURITY INFORMATION','[REFILE]KOAK/ OAK']],[10,['KOREAN AIR NOTAM PACKAGE 3','[FIR]RKRR/ Incheon']],[11,['END OF KOREAN AIR NOTAM PACKAGE 3']]])lines.forEach((line,i)=>doc.getPage(page).drawText(line,{x:30,y:700-i*20,size:10,font}));
  const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));assert.ok(ui.blob,ui.elements.status.textContent);
  await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
   const roots=await read.getOutline(),first=roots.find(item=>item.title==='Notam 1'),second=roots.find(item=>item.title==='Notam 2'),third=roots.find(item=>item.title==='Notam 3');
   assert.deepEqual(first.items.map(item=>item.title),['DEP : RKSI','DEST : KSFO','ALTN : KOAK','SECY']);
-  assert.deepEqual(second.items.map(item=>item.title),['DEP : RKSI','ERA : KSFO','SECY']);
+  assert.deepEqual(second.items.map(item=>item.title),['DEP : RKSI','ERA : KSFO','SECY','REFILE : KOAK']);
   assert.deepEqual(third.items.map(item=>item.title),['FIR : RKRR']);
-  for(const [parent,pages] of [[first,[5,6,6,7]],[second,[9,9,9]],[third,[10]]])for(const [i,item]of parent.items.entries())assert.equal(await read.getPageIndex(item.dest[0]),pages[i]);
+  for(const [parent,pages] of [[first,[5,6,6,7]],[second,[9,9,9,9]],[third,[10]]])for(const [i,item]of parent.items.entries())assert.equal(await read.getPageIndex(item.dest[0]),pages[i]);
   assert.equal(read.numPages,12);
  });
 });

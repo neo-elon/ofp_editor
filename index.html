@@ -26,7 +26,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.2</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.3</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -196,7 +196,7 @@ function flightPlanSections(lines){
   ['Refile',/\bREFILE\s+FLT\s+PLAN\b/]
  ].filter(([,pattern])=>headings.some(title=>pattern.test(title))).map(([title])=>title);
 }
-const NOTAM_ROLE='DEP|DEST|ALTN\\s*\\d*|3\\s*%\\s*ERA|EDTO(?:\\s+ERA)?|ERA|FIR';
+const NOTAM_ROLE='REFILE(?:\\s+(?:DEP|DEST|ALTN\\s*\\d*|ERA))?|DEP|DEST|ALTN\\s*\\d*|3\\s*%\\s*ERA|EDTO(?:\\s+ERA)?|ERA|FIR';
 const NOTAM_BRACKET=new RegExp('^\\[\\s*('+NOTAM_ROLE+')\\s*\\]\\s*:?\\s*([A-Z]{4})\\b','i');
 const NOTAM_COLON=new RegExp('^('+NOTAM_ROLE+')\\s*[:：]\\s*([A-Z]{4})(?=\\s*(?:$|[/,]))','i');
 function notamHeading(line){
