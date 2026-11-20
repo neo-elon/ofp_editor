@@ -185,6 +185,14 @@ function weatherChart(lines){
   if(/^CROSS(?:CHART)?\d*$/.test(title))return 'Cross Chart';
  }
 }
+function flightPlanSections(lines){
+ const headings=lines.map(line=>line.trim().replace(/\s+/g,' ').replace(/[:：]$/,'').toUpperCase());
+ return [
+  ['3% Contingency',/^3\s*(?:%|PCT)\s*CONTINGENCY(?:\s+(?:ERA(?:\s+VALIDATION)?|VALIDATION|FUEL))?$/],
+  ['EDTO',/^(?:EDTO|ETOPS)(?:\s+(?:INFORMATION|SUMMARY|ANALYSIS|PLANNING|(?:CRITICAL\s+)?FUEL(?:\s+(?:ANALYSIS|SUMMARY|SCENARIO))?))?$/],
+  ['Refile',/^(?:REFILE|REFILING)(?:\s+(?:INFORMATION|SUMMARY|FLIGHT PLAN|PLAN|DATA))?$/]
+ ].filter(([,pattern])=>headings.some(title=>pattern.test(title))).map(([title])=>title);
+}
 async function readOutline(doc){
  const found=Object.create(null);async function walk(nodes){for(const node of nodes||[]){
   if(node.dest)try{
@@ -269,6 +277,9 @@ async function run(file){
   const {page:cfpPage,cfp}=findCFP(texts,outline.FlightPlan);sections.FlightPlan=cfpPage;
   if(flightInfo===undefined)for(let i=cfpPage+16;i<read.numPages;i++)if(/CFP\s+PLAN\s+\d+/i.test(texts[i].join('\n'))){flightInfo=i;break}
   atsPage=findATS(texts,cfp,flightInfo);
+  // Only inspect the primary CFP, excluding later FlightInfo copies and fuel summary rows.
+  const flightEnd=atsPage>cfpPage?atsPage:flightInfo??read.numPages;
+  for(let i=cfpPage;i<flightEnd;i++)for(const title of flightPlanSections(texts[i]))if(sections[title]===undefined)sections[title]=i;
   sections['ATS FLIGHT PLAN']=atsPage;sections.Header=atsPage+1;
   if(flightInfo!==undefined)sections.FlightInfo=flightInfo;if(ocean!==undefined)sections.OceanicTracks=ocean;
   const ats=parseATS(texts[atsPage],cfp.dest),result=compare(cfp.route,ats,cfp.origin,cfp.dest);
@@ -295,6 +306,8 @@ async function run(file){
   const bookmarks=order.filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   const weather=bookmarks.find(item=>item.title==='Weather Briefing');
   if(weather)weather.children=['WindTemp','SIGWX','ASC(TURB)','Cross Chart'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
+  const flightPlan=bookmarks.find(item=>item.title==='FlightPlan');
+  flightPlan.children=['3% Contingency','EDTO','Refile'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   const allBookmarks=flattenBookmarks(bookmarks);
   addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
@@ -302,9 +315,10 @@ async function run(file){
   await safety.verify(originalRead,outputRead,{document,edits,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
   const savedOutline=await readOutline(outputRead);
   for(const item of allBookmarks)if(savedOutline[item.title]!==sections[item.title])abort('검증 실패: 북마크 목적지가 다릅니다: '+item.title);
-  if(weather){
-   const savedWeather=(await outputRead.getOutline()).find(item=>item.title==='Weather Briefing');
-   if(!savedWeather||JSON.stringify(savedWeather.items.map(item=>item.title))!==JSON.stringify(weather.children.map(item=>item.title)))abort('검증 실패: Weather Briefing 하위 책갈피 구조가 다릅니다.');
+  const savedRoots=await outputRead.getOutline();
+  for(const parent of bookmarks.filter(item=>item.children)){
+   const savedParent=savedRoots.find(item=>item.title===parent.title);
+   if(!savedParent||JSON.stringify(savedParent.items.map(item=>item.title))!==JSON.stringify(parent.children.map(item=>item.title)))abort('검증 실패: '+parent.title+' 하위 책갈피 구조가 다릅니다.');
   }
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);

@@ -248,6 +248,29 @@ test('weather chart heading detection ignores references in flight notes and NOT
  assert.equal(api.weatherChart(['EXPECTED SIG WX (REFER TO SIG AND TURB CHART)','AVBL CROSS RWY18L','START OF WIND AND TEMPERATURE SUMMARY']),undefined);
 });
 
+test('FlightPlan section detection excludes fuel summary rows and sentence references',()=>{
+ const {api}=app();
+ assert.deepEqual(api.flightPlanSections(['3% CONTINGENCY ERA VALIDATION','EDTO INFORMATION','REFILE FLIGHT PLAN']),['3% Contingency','EDTO','Refile']);
+ assert.deepEqual(api.flightPlanSections(['3 PCT CONT 0020 00.12','REFILE RES 0000 00.00','REFER TO EDTO INFORMATION','EDTO FUEL 1234']),[]);
+ assert.deepEqual(api.flightPlanSections(['EDTO','REFILE','3 PCT CONTINGENCY']),['3% Contingency','EDTO','Refile']);
+});
+
+test('FlightPlan has three ordered children at first primary-CFP headings alongside weather children',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({pages:12,atsIndex:8})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [page,title] of [[2,'3% CONTINGENCY ERA VALIDATION'],[3,'EDTO INFORMATION'],[4,'REFILE FLIGHT PLAN'],[6,'3% CONTINGENCY ERA VALIDATION'],[7,'EDTO SUMMARY'],[9,'REFILE']])doc.getPage(page).drawText(title,{x:30,y:720,size:10,font});
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const roots=await read.getOutline(),flight=roots.find(item=>item.title==='FlightPlan'),titles=['3% Contingency','EDTO','Refile'];
+  assert.deepEqual(flight.items.map(item=>item.title),titles);
+  const outline=await ui.api.readOutline(read);
+  for(const [i,page] of [2,3,4].entries())assert.equal(outline[titles[i]],page);
+  assert.deepEqual(roots.find(item=>item.title==='Weather Briefing').items.map(item=>item.title),['WindTemp','Cross Chart']);
+  assert.ok(!roots.some(item=>titles.includes(item.title)));
+  assert.equal(read.numPages,12);
+ });
+});
+
 test('Weather Briefing owns four ordered child bookmarks pointing to first matching charts',async()=>{
  const doc=await lib.PDFDocument.load(await fixture({pages:12})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
  for(const [page,title] of [[6,'s i g w x 1'],[7,'a s c'],[8,'w i n t e m 2'],[9,'s i g w x 2'],[10,'a s c'],[11,'c r o s s']])doc.getPage(page).drawText(title,{x:30,y:760,size:10,font});
