@@ -84,6 +84,37 @@ test('CFP discovery ignores stale and wrong-page bookmarks, including first page
  assert.throws(()=>api.findCFP({0:['unreadable text']},0),/텍스트 추출/);
 });
 
+test('passenger totals sum both columns, pad zeros and reject incomplete or duplicate classes',async()=>{
+ const {api}=app(),doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ const page=text=>({view:[0,0,595,842],getTextContent:async()=>({items:[{str:'1. PAX/CARGO RESERVATION',width:200,transform:[10,0,0,10,68,647]},{str:text,width:354,transform:[10,0,0,10,68,627]},{str:'2. FLIGHT SPECIAL NOTICE',width:180,transform:[10,0,0,10,68,607]}]})});
+ let result=await api.paxLayout(page('PASSENGERS: FIRST 0/0 BUSINESS 33/36 ECONOMY 196/287'),font);
+ assert.equal(result.text,'TTL 229/323');assert.equal(result.x,432);assert.equal(result.y,627);
+ result=await api.paxLayout(page('FIRST 0/0 BUSINESS 0/0 ECONOMY 1/2'),font);assert.equal(result.text,'TTL 001/002');
+ await assert.rejects(api.paxLayout(page('FIRST 0/0 BUSINESS 33/36'),font),/모두 읽지/);
+ await assert.rejects(api.paxLayout(page('FIRST 0/0 BUSINESS 33/36 ECONOMY 1/2 FIRST 1/1'),font),/중복/);
+ await assert.rejects(api.paxLayout(page('FIRST 0/0 BUSINESS 33/36 ECONOMY 1/2.5'),font),/모두 읽지/);
+});
+
+test('passenger total is saved in blue to the right of the reservation row and overlap blocks download',async()=>{
+ for(const mode of ['normal','blocked','duplicate']){
+  const doc=await lib.PDFDocument.load(await fixture()),font=await doc.embedFont(lib.StandardFonts.Courier),page=doc.getPage(4);
+  page.drawText('1. PAX/CARGO RESERVATION',{x:68,y:647,size:10,font});
+  for(const [text,x]of [['PASSENGERS:',68],['FIRST 0/0',146],['BUSINESS 33/36',224],['ECONOMY 196/287',332]])page.drawText(text,{x,y:627,size:10,font});
+  page.drawText('2. FLIGHT SPECIAL NOTICE',{x:68,y:607,size:10,font});
+  if(mode==='blocked')page.drawRectangle({x:432,y:627,width:20,height:5,color:lib.rgb(0,0,0)});
+  if(mode==='duplicate')doc.getPage(5).drawText('1. PAX/CARGO RESERVATION',{x:68,y:647,size:10,font});
+  const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+  if(mode!=='normal'){assert.equal(ui.blob,undefined);assert.match(ui.elements.status.textContent,mode==='blocked'?/승객 합계 표시 위치/:/페이지가 여러 개/);continue}
+  assert.ok(ui.blob,ui.elements.status.textContent);
+  await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+   const result=await read.getPage(5),item=(await result.getTextContent()).items.find(item=>item.str==='TTL 229/323');
+   assert.ok(item);assert.equal(item.transform[4],432);assert.equal(item.transform[5],627);assert.equal(read.numPages,7);
+   const ops=await result.getOperatorList(),OPS=require('pdfjs-dist/build/pdf.js').OPS;
+   assert.ok(ops.fnArray.some((op,i)=>op===OPS.setFillRGBColor&&[...ops.argsArray[i]].every((v,c)=>Math.abs(v-[2,85,214][c])<1)));
+  });
+ }
+});
+
 test('DISC follows the complete matching row, including split text items and trailing reason',async()=>{
  const {api}=app(),doc=await lib.PDFDocument.create(),font=await doc.embedFont(lib.StandardFonts.Helvetica);
  const item=(str,x,y,width)=>({str,width,transform:[10,0,0,10,x,y]});
