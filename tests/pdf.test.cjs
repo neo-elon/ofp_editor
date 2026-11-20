@@ -327,6 +327,43 @@ test('Weather Briefing owns four ordered child bookmarks pointing to first match
  assert.throws(()=>api.addBookmarks(invalid,[{title:'Weather Briefing',page:0,children:[{title:'SIGWX',page:99}]}],lib),/북마크 페이지 범위/);
 });
 
+test('NOTAM subsection titles use actual ICAO headings and ignore package summaries',()=>{
+ const {api}=app();
+ for(const [heading,title] of [['[DEP] RKSI/ ICN','DEP : RKSI'],['DEST : KSFO','DEST : KSFO'],['[ALTN 2]KOAK/ OAK','ALTN : KOAK'],['SECY / SECURITY INFORMATION, US','SECY'],['[3% ERA]VVDN/ DAD','3% ERA : VVDN'],['[FIR]RKRR/ Incheon','FIR : RKRR']])assert.equal(api.notamHeading(heading),title);
+ for(const line of ['DEP: RKSI DEST: KSFO ALTN: KOAK SECY','DEP : RKSI / DEST : KSFO','DEP : 1030Z - 0100Z','1. 31OCT26 SECY COAD07/26'])assert.equal(api.notamHeading(line),undefined);
+ const groups=api.notamSections({0:['[DEP]KJFK/ outside'],1:['KOREAN AIR NOTAM PACKAGE 1','[DEP]RKSI/ ICN'],2:['SECY / SECURITY INFORMATION'],3:['KOREAN AIR NOTAM PACKAGE 2','[DEP]RKSI/ ICN','[ERA]KSFO/ SFO'],4:['KOREAN AIR NOTAM PACKAGE 2','[ERA]KSFO/ SFO','END OF KOREAN AIR NOTAM PACKAGE 2'],5:['[ALTN]KOAK/ outside'],6:['KOREAN AIR NOTAM PACKAGE 3','[FIR]RKRR/ Incheon'],7:['END OF KOREAN AIR NOTAM PACKAGE 3'],8:['KOREAN AIR NOTAM PACKAGE 1','[DEP]KZZZ/ copied package']});
+ assert.deepEqual([...groups.get('Notam 1')],[['DEP : RKSI',1],['SECY',2]]);
+ assert.deepEqual([...groups.get('Notam 2')],[['DEP : RKSI',3],['ERA : KSFO',3]]);
+ assert.deepEqual([...groups.get('Notam 3')],[['FIR : RKRR',6]]);
+ const overview=api.notamSections({0:['KOREAN AIR NOTAM PACKAGE 1','DEST : KSFO','ALTN : KOAK','SECY'],1:['[DEST]KSFO/ SFO','[ALTN]KOAK/ OAK'],2:['SECY / SECURITY INFORMATION']});
+ assert.deepEqual([...overview.get('Notam 1')],[['DEST : KSFO',1],['ALTN : KOAK',1],['SECY',2]]);
+});
+
+test('NOTAM child bookmarks stay under their package even when titles repeat across packages',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({pages:12})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [page,lines] of [[5,['[DEP]RKSI/ ICN']],[6,['[DEST]KSFO/ SFO','[ALTN]KOAK/ OAK']],[7,['SECY / SECURITY INFORMATION']],[8,['KOREAN AIR NOTAM PACKAGE 2']],[9,['[DEP]RKSI/ ICN','[ERA]KSFO/ SFO','SECY / SECURITY INFORMATION']],[10,['KOREAN AIR NOTAM PACKAGE 3','[FIR]RKRR/ Incheon']],[11,['END OF KOREAN AIR NOTAM PACKAGE 3']]])lines.forEach((line,i)=>doc.getPage(page).drawText(line,{x:30,y:700-i*20,size:10,font}));
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const roots=await read.getOutline(),first=roots.find(item=>item.title==='Notam 1'),second=roots.find(item=>item.title==='Notam 2'),third=roots.find(item=>item.title==='Notam 3');
+  assert.deepEqual(first.items.map(item=>item.title),['DEP : RKSI','DEST : KSFO','ALTN : KOAK','SECY']);
+  assert.deepEqual(second.items.map(item=>item.title),['DEP : RKSI','ERA : KSFO','SECY']);
+  assert.deepEqual(third.items.map(item=>item.title),['FIR : RKRR']);
+  for(const [parent,pages] of [[first,[5,6,6,7]],[second,[9,9,9]],[third,[10]]])for(const [i,item]of parent.items.entries())assert.equal(await read.getPageIndex(item.dest[0]),pages[i]);
+  assert.equal(read.numPages,12);
+ });
+});
+
+test('bookmark verification validates duplicate titles by full parent path',async()=>{
+ const {api}=app(),doc=await lib.PDFDocument.create();for(let i=0;i<3;i++)doc.addPage();
+ const expected=[{title:'Notam 1',page:0,children:[{title:'SECY',page:1}]},{title:'Notam 2',page:1,children:[{title:'SECY',page:2}]}];
+ api.addBookmarks(doc,expected,lib);
+ await inspect(await doc.save(),async read=>{
+  await api.verifyBookmarks(read,expected,[0,1,2]);
+  const wrong=JSON.parse(JSON.stringify(expected));wrong[1].children[0].page=1;
+  await assert.rejects(api.verifyBookmarks(read,wrong,[0,1,2]),/Notam 2\/SECY/);
+ });
+});
+
 test('NOTAM bookmarks target the first heading, including repeats across extraction batches',async()=>{
  const doc=await lib.PDFDocument.load(await fixture({pages:14}));
  const font=await doc.embedFont(lib.StandardFonts.Helvetica);
