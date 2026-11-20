@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.13</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.14</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -489,6 +489,7 @@ async function run(file){
   const weather=bookmarks.find(item=>item.title==='Weather Briefing');
   if(weather)weather.children=['WindTemp','SIGWX','ASC(TURB)','Cross Chart'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   const flightPlan=bookmarks.find(item=>item.title==='FlightPlan');
+  flightPlan.title='FlighPlan No.'+cfp.plan.padStart(4,'0');
   flightPlan.children=['3% Contingency','EDTO','Refile'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
   for(const [title,children] of notamSections(texts)){
    const parent=bookmarks.find(item=>item.title===title);

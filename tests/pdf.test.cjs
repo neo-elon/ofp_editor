@@ -272,7 +272,7 @@ test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotat
   assert.ok(Math.abs(disc.transform[4]-(label.transform[4]+label.width+10))<.01);
   assert.match(await text(2),/ETD RKSI 0100Z ETA RJAA 0300Z/);
   const outline=await ui.api.readOutline(read);
-  for(const [title,index] of Object.entries({FlightPlan:0,'ATS FLIGHT PLAN':3,Header:4,'Weather Briefing':2,WindTemp:1,'Cross Chart':4,'Notam 1':5,OceanicTracks:6}))assert.equal(outline[title],index,title);
+  for(const [title,index] of Object.entries({'FlighPlan No.1234':0,'ATS FLIGHT PLAN':3,Header:4,'Weather Briefing':2,WindTemp:1,'Cross Chart':4,'Notam 1':5,OceanicTracks:6}))assert.equal(outline[title],index,title);
   const roots=await read.getOutline(),weather=roots.find(item=>item.title==='Weather Briefing');
   assert.deepEqual(weather.items.map(item=>item.title),['WindTemp','Cross Chart']);
   assert.ok(!roots.some(item=>['Weather Charts','WindTemp','Cross Chart'].includes(item.title)));
@@ -300,7 +300,7 @@ test('FlightPlan has three ordered children at first primary-CFP headings alongs
  const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
  assert.ok(ui.blob,ui.elements.status.textContent);
  await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
-  const roots=await read.getOutline(),flight=roots.find(item=>item.title==='FlightPlan'),titles=['3% Contingency','EDTO','Refile'];
+  const roots=await read.getOutline(),flight=roots.find(item=>item.title==='FlighPlan No.1234'),titles=['3% Contingency','EDTO','Refile'];
   assert.deepEqual(flight.items.map(item=>item.title),titles);
   const outline=await ui.api.readOutline(read);
   for(const [i,page] of [2,3,4].entries())assert.equal(outline[titles[i]],page);
