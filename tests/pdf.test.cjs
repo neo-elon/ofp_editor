@@ -350,6 +350,7 @@ test('NOTAM header airport links round trip to explicit headings and preserve ex
  api.addNotamLinks(doc,links,[0,1,2,3],lib);const output=await doc.save({useObjectStreams:false});
  await inspect(bytes,async before=>inspect(output,async after=>{
   await safety.verify(before,after,{document});await api.verifyNotamLinks(after,links,[0,1,2,3]);
+  for(let p=1;p<=3;p++)for(const a of await(await after.getPage(p)).getAnnotations())if(a.dest){assert.equal(a.borderStyle.style,5);assert.equal(a.borderStyle.width,.8);assert.deepEqual([...a.color],[2,85,214])}
   assert.ok((await (await after.getPage(1)).getAnnotations()).some(a=>a.url==='https://example.com/'));
   const wrong=links.map(l=>({...l,target:3}));await assert.rejects(api.verifyNotamLinks(after,wrong,[0,1,2,3]),/NOTAM/);
  }));
