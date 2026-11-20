@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.14</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.20.15</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -36,7 +36,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 <section class="features" aria-labelledby="features-title"><h2 id="features-title">주요 기능</h2>
 <ul>
 <li>CFP/ATS Route를 비교해 일치하면 (Checked)를 표시하고, 불일치 구간은 빨간 밑줄로 표시합니다.</li>
-<li>CFP Route, DISC, ETD/ETA 등 필요한 표시를 PDF에 추가합니다.</li>
+<li>CFP Route, DISC, ETD/ETA, 승객 인원 합계 등 필요한 표시를 PDF에 추가합니다.</li>
 <li>Flight Plan, Weather Briefing, NOTAM과 하위 항목의 책갈피를 만듭니다.</li>
 <li>NOTAM의 파란 밑줄 공항 코드를 누르면 본문으로 이동하고, 본문 제목의 코드를 누르면 헤더로 돌아옵니다.</li>
 <li>원본과 결과를 대조한 뒤 정해진 파일명으로 저장하며, 검증에 실패하면 다운로드를 중단합니다.</li>
@@ -123,6 +123,22 @@ function wrap(route,font,size,max,checked){
  return lines;
 }
 function textWidth(font,text,size){return window.OFPSafety.textWidth(font,text,size)}
+const PAX_HEADING=/^(?:\d+\.\s*)?PAX\s*\/\s*CARGO\s+RESERVATION\s*$/i;
+async function paxLayout(page,font){
+ const rows=textRows((await page.getTextContent()).items),start=rows.findIndex(row=>PAX_HEADING.test(row.text));
+ if(start<0)abort('PAX/CARGO RESERVATION 제목을 찾지 못했습니다.');
+ const end=rows.findIndex((row,i)=>i>start&&/^\d+\.\s/.test(row.text)),section=rows.slice(start+1,end<0?rows.length:end),values=new Map();let last;
+ for(const row of section)for(const match of row.text.matchAll(/\b(FIRST|BUSINESS|ECONOMY)\s+(\d+)\s*\/\s*(\d+)(?=\s|$)/gi)){
+  const role=match[1].toUpperCase();if(values.has(role))abort('승객 좌석 등급 값이 중복되어 합계를 확인하지 못했습니다.');
+  values.set(role,[Number(match[2]),Number(match[3])]);last=row;
+ }
+ if(values.size!==3)abort('FIRST/BUSINESS/ECONOMY의 인원 값을 모두 읽지 못했습니다.');
+ const totals=[0,0];for(const pair of values.values())for(let i=0;i<2;i++)totals[i]+=pair[i];
+ if(!totals.every(Number.isSafeInteger))abort('승객 합계 값이 유효하지 않습니다.');
+ const text='TTL '+totals.map(n=>String(n).padStart(3,'0')).join('/'),x=Math.max(...last.items.map(item=>item.transform[4]+item.width))+10;
+ for(let size=10;size>=6;size-=.5)if(x+textWidth(font,text,size)+2<=page.view[2])return {text,x,y:last.y,size};
+ abort('승객 인원 오른쪽에 TTL 합계를 표시할 여백이 부족합니다.');
+}
 async function discLayout(page,text,font){
  const matches=textRows((await page.getTextContent()).items).filter(row=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(row.text));
  if(matches.length!==1)abort('DISC FUEL DUE TO 문구가 있는 줄을 확정하지 못했습니다. 임의 위치에 DISC를 표시하지 않습니다.');
@@ -471,6 +487,13 @@ async function run(file){
   const atsSource=await read.getPage(atsPage+1),atsAnnotations=await atsSource.getAnnotations();
   const clearRouteArea=await safety.whitespace(atsSource,document);
   drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3],clearRouteArea));
+  const paxPages=Object.keys(texts).map(Number).filter(i=>texts[i].some(line=>PAX_HEADING.test(line)));
+  if(paxPages.length>1)abort('PAX/CARGO RESERVATION 페이지가 여러 개여서 합계 표시 위치를 확인하지 못했습니다.');
+  if(paxPages.length){
+   const index=paxPages[0],source=await read.getPage(index+1),{text,...position}=await paxLayout(source,font),clear=await safety.whitespace(source,document),{x,y,size}=position;
+   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))abort('승객 합계 표시 위치에 기존 내용이 있어 처리를 중단했습니다.');
+   (await editable(index)).drawText(text,{...position,font,color:lib.rgb(...BLUE)});
+  }
   if(cfp.disc&&validPage(atsPage+2,read.numPages)){
    const candidates=Object.keys(texts).map(Number).filter(i=>texts[i].some(line=>/\bDISC\s+FUEL\s+DUE\s+TO\b/i.test(line)));
    const discPage=candidates.includes(atsPage+2)?atsPage+2:candidates.length===1?candidates[0]:undefined;
