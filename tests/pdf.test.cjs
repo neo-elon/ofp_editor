@@ -130,6 +130,27 @@ test('ambiguous ATS candidates block download and identify candidate pages',asyn
  assert.equal(ui.blob,undefined);assert.match(ui.elements.status.textContent,/후보 페이지: 4, 7/);
 });
 
+test('ATS discovery prioritizes COPY OF ATS FPL including split lines and punctuation',()=>{
+ const {api}=app(),cfp=api.parseCFP(cfpLines);
+ const marked=['ATS FLIGHT PLAN',...atsLines.map(line=>line.replace('DEF','XYZ')),'*** copy of','ATS FPL, SUBMITTED ***'];
+ assert.equal(api.findATS({3:atsLines,8:marked},cfp),8);
+ assert.throws(()=>api.findATS({3:[...atsLines,'COPY OF ATS FPL'],8:marked},cfp),/후보 페이지: 4, 9/);
+});
+
+for(const mismatch of [false,true])test('submitted ATS caption resolves duplicate pages and preserves '+(mismatch?'mismatch detection':'Checked'),async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({mismatch})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [i,line] of atsLines.entries())doc.getPage(6).drawText(line,{x:30,y:760-i*16,size:10,font});
+ doc.getPage(3).drawText('COPY OF ATS FPL, SUBMITTED AT 0100Z',{x:30,y:100,size:10,font});
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const outline=await ui.api.readOutline(read);assert.equal(outline['ATS FLIGHT PLAN'],3);
+  const text=(await(await read.getPage(4)).getTextContent()).items.map(item=>item.str).join(' ');
+  assert.equal(text.includes('(Checked)'),!mismatch);
+ });
+ if(mismatch)assert.match(ui.elements.status.textContent,/불일치/);
+});
+
 test('page identity mapping handles different parser order; rejects missing/duplicate pages',async()=>{
  const {api}=app(),doc=await lib.PDFDocument.create();doc.addPage();doc.addPage();
  const pages=doc.getPages(),ref=i=>({num:pages[i].ref.objectNumber,gen:pages[i].ref.generationNumber});
