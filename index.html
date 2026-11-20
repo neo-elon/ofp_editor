@@ -161,12 +161,37 @@ function drawRoute(page,route,result,font,lib,layout={size:10,top:17,leading:11.
 }
 function addBookmarks(doc,items,lib){
  if(!items.length)return;
- for(const item of items)if(!validPage(item.page,doc.getPageCount()))abort('북마크 페이지 범위 오류: '+item.title);
- const ctx=doc.context,N=lib.PDFName,H=lib.PDFHexString,root=ctx.obj({Type:N.of('Outlines'),Count:items.length}),rootRef=ctx.register(root),refs=items.map(()=>ctx.nextRef());
- items.forEach((it,i)=>{const node=ctx.obj({Title:H.fromText(it.title),Parent:rootRef,Dest:[doc.getPage(it.page).ref,N.of('Fit')]});
-  if(i)node.set(N.of('Prev'),refs[i-1]);if(i<items.length-1)node.set(N.of('Next'),refs[i+1]);ctx.assign(refs[i],node);
- });
- root.set(N.of('First'),refs[0]);root.set(N.of('Last'),refs[refs.length-1]);doc.catalog.set(N.of('Outlines'),rootRef);doc.catalog.set(N.of('PageMode'),N.of('UseOutlines'));
+ for(const item of flattenBookmarks(items))if(!validPage(item.page,doc.getPageCount()))abort('북마크 페이지 범위 오류: '+item.title);
+ const ctx=doc.context,N=lib.PDFName,H=lib.PDFHexString,root=ctx.obj({Type:N.of('Outlines')}),rootRef=ctx.register(root);
+ function writeLevel(list,parent,parentRef){
+  const refs=list.map(()=>ctx.nextRef());let count=0;
+  list.forEach((item,i)=>{
+   const node=ctx.obj({Title:H.fromText(item.title),Parent:parentRef,Dest:[doc.getPage(item.page).ref,N.of('Fit')]});
+   if(i)node.set(N.of('Prev'),refs[i-1]);if(i<list.length-1)node.set(N.of('Next'),refs[i+1]);
+   ctx.assign(refs[i],node);count++;
+   if(item.children?.length)count+=writeLevel(item.children,node,refs[i]);
+  });
+  parent.set(N.of('First'),refs[0]);parent.set(N.of('Last'),refs[refs.length-1]);parent.set(N.of('Count'),ctx.obj(count));return count;
+ }
+ writeLevel(items,root,rootRef);doc.catalog.set(N.of('Outlines'),rootRef);doc.catalog.set(N.of('PageMode'),N.of('UseOutlines'));
+}
+function flattenBookmarks(items){return items.flatMap(item=>[item,...flattenBookmarks(item.children||[])])}
+function weatherChart(lines){
+ for(const line of lines){
+  const title=line.replace(/\s+/g,'').toUpperCase();
+  if(/^(?:WINTEM|WINDTEMP|WINDTEMPERATURE)(?:CHART)?\d*$/.test(title))return 'WindTemp';
+  if(/^(?:SIGWX|SIGNIFICANTWEATHER)(?:CHART)?\d*$/.test(title))return 'SIGWX';
+  if(/^ASC(?:\(TURB\)|TURB)?\d*$/.test(title))return 'ASC(TURB)';
+  if(/^CROSS(?:CHART)?\d*$/.test(title))return 'Cross Chart';
+ }
+}
+function flightPlanSections(lines){
+ const headings=lines.map(line=>line.trim().replace(/\s+/g,' ').replace(/[:：]$/,'').toUpperCase());
+ return [
+  ['3% Contingency',/^3\s*(?:%|PCT)\s*CONTINGENCY(?:\s+(?:ERA(?:\s+VALIDATION)?|VALIDATION|FUEL))?$/],
+  ['EDTO',/\bEDTO\s+EQUAL\s+TIME\s+POINT\b/],
+  ['Refile',/\bREFILE\s+FLT\s+PLAN\b/]
+ ].filter(([,pattern])=>headings.some(title=>pattern.test(title))).map(([title])=>title);
 }
 async function readOutline(doc){
  const found=Object.create(null);async function walk(nodes){for(const node of nodes||[]){
@@ -245,14 +270,16 @@ async function run(file){
    batch.forEach((i,offset)=>{
     const lines=linesBatch[offset],t=lines.join('\n');texts[i]=lines;
     if(/WEATHER\s+BRIEFING/i.test(t)&&sections['Weather Briefing']===undefined)sections['Weather Briefing']=i;
-    if(/w\s*i\s*n\s*t\s*e\s*m\s*1/i.test(t)&&sections['Weather Charts']===undefined)sections['Weather Charts']=i;
-    if(/c\s*r\s*o\s*s\s*s/i.test(t)&&sections['Cross Chart']===undefined)sections['Cross Chart']=i;
+    const chart=weatherChart(lines);if(chart&&sections[chart]===undefined)sections[chart]=i;
     const n=t.match(/KOREAN\s+AIR\s+NOTAM\s+PACKAGE\s*([123])/i);if(n&&sections['Notam '+n[1]]===undefined)sections['Notam '+n[1]]=i;
    });pct(20+Math.round(50*(start+batch.length)/read.numPages));
   }
   const {page:cfpPage,cfp}=findCFP(texts,outline.FlightPlan);sections.FlightPlan=cfpPage;
   if(flightInfo===undefined)for(let i=cfpPage+16;i<read.numPages;i++)if(/CFP\s+PLAN\s+\d+/i.test(texts[i].join('\n'))){flightInfo=i;break}
   atsPage=findATS(texts,cfp,flightInfo);
+  // Only inspect the primary CFP, excluding later FlightInfo copies and fuel summary rows.
+  const flightEnd=atsPage>cfpPage?atsPage:flightInfo??read.numPages;
+  for(let i=cfpPage;i<flightEnd;i++)for(const title of flightPlanSections(texts[i]))if(sections[title]===undefined)sections[title]=i;
   sections['ATS FLIGHT PLAN']=atsPage;sections.Header=atsPage+1;
   if(flightInfo!==undefined)sections.FlightInfo=flightInfo;if(ocean!==undefined)sections.OceanicTracks=ocean;
   const ats=parseATS(texts[atsPage],cfp.dest),result=compare(cfp.route,ats,cfp.origin,cfp.dest);
@@ -275,17 +302,27 @@ async function run(file){
    const p=await editable(sections['Weather Briefing']),t='ETD '+cfp.times[1]+' '+cfp.times[2]+'Z ETA '+cfp.times[3]+' '+cfp.times[4]+'Z';
    p.drawText(t,{x:315,y:p.getHeight()-215,size:10,font,color:lib.rgb(...BLUE)});
   }
-  const order=['FlightPlan','ATS FLIGHT PLAN','Header','Weather Briefing','Weather Charts','Cross Chart','Notam 1','Notam 2','Notam 3','FlightInfo','OceanicTracks'];
+  const order=['FlightPlan','ATS FLIGHT PLAN','Header','Weather Briefing','Notam 1','Notam 2','Notam 3','FlightInfo','OceanicTracks'];
   const bookmarks=order.filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
+  const weather=bookmarks.find(item=>item.title==='Weather Briefing');
+  if(weather)weather.children=['WindTemp','SIGWX','ASC(TURB)','Cross Chart'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
+  const flightPlan=bookmarks.find(item=>item.title==='FlightPlan');
+  flightPlan.children=['3% Contingency','EDTO','Refile'].filter(k=>validPage(sections[k],read.numPages)).map(k=>({title:k,page:pageMap[sections[k]]}));
+  const allBookmarks=flattenBookmarks(bookmarks);
   addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
   const outputTask=openPDF(pdfjs,output);tasks.push(outputTask);const outputRead=await outputTask.promise;
   await safety.verify(originalRead,outputRead,{document,edits,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
   const savedOutline=await readOutline(outputRead);
-  for(const item of bookmarks)if(savedOutline[item.title]!==sections[item.title])abort('검증 실패: 북마크 목적지가 다릅니다: '+item.title);
+  for(const item of allBookmarks)if(savedOutline[item.title]!==sections[item.title])abort('검증 실패: 북마크 목적지가 다릅니다: '+item.title);
+  const savedRoots=await outputRead.getOutline();
+  for(const parent of bookmarks.filter(item=>item.children)){
+   const savedParent=savedRoots.find(item=>item.title===parent.title);
+   if(!savedParent||JSON.stringify(savedParent.items.map(item=>item.title))!==JSON.stringify(parent.children.map(item=>item.title)))abort('검증 실패: '+parent.title+' 하위 책갈피 구조가 다릅니다.');
+  }
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);
-  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+bookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
+  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+allBookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
  }catch(e){progress.style.display='none';message('처리 중단: '+(e.message||String(e))+'\n검증을 통과하지 못해 다운로드하지 않습니다. 원본 PDF는 변경되지 않았습니다.','error');console.error(e)}finally{for(const task of tasks)try{await task.destroy()}catch(e){console.warn('PDF worker 정리 실패',e)}busy=false;choose.disabled=false}
 }
 })();

@@ -234,9 +234,59 @@ test('real PDF libraries: stale index 58 on seven-page PDF, save/reopen, annotat
   assert.ok(Math.abs(disc.transform[4]-(label.transform[4]+label.width+10))<.01);
   assert.match(await text(2),/ETD RKSI 0100Z ETA RJAA 0300Z/);
   const outline=await ui.api.readOutline(read);
-  for(const [title,index] of Object.entries({FlightPlan:0,'ATS FLIGHT PLAN':3,Header:4,'Weather Briefing':2,'Weather Charts':1,'Cross Chart':4,'Notam 1':5,OceanicTracks:6}))assert.equal(outline[title],index,title);
+  for(const [title,index] of Object.entries({FlightPlan:0,'ATS FLIGHT PLAN':3,Header:4,'Weather Briefing':2,WindTemp:1,'Cross Chart':4,'Notam 1':5,OceanicTracks:6}))assert.equal(outline[title],index,title);
+  const roots=await read.getOutline(),weather=roots.find(item=>item.title==='Weather Briefing');
+  assert.deepEqual(weather.items.map(item=>item.title),['WindTemp','Cross Chart']);
+  assert.ok(!roots.some(item=>['Weather Charts','WindTemp','Cross Chart'].includes(item.title)));
  });
  assert.equal(ui.elements.choose.disabled,false);
+});
+
+test('weather chart heading detection ignores references in flight notes and NOTAM text',()=>{
+ const {api}=app();
+ for(const [title,expected] of [['w i n t e m 1','WindTemp'],['s i g w x 1','SIGWX'],['a s c','ASC(TURB)'],['ASC (TURB)','ASC(TURB)'],['c r o s s','Cross Chart']])assert.equal(api.weatherChart([title]),expected);
+ assert.equal(api.weatherChart(['EXPECTED SIG WX (REFER TO SIG AND TURB CHART)','AVBL CROSS RWY18L','START OF WIND AND TEMPERATURE SUMMARY']),undefined);
+});
+
+test('FlightPlan section detection excludes fuel summary rows and sentence references',()=>{
+ const {api}=app();
+ assert.deepEqual(api.flightPlanSections(['3% CONTINGENCY ERA VALIDATION','--- EDTO EQUAL TIME POINT 1 ---','REFILE FLT PLAN KAL123']),['3% Contingency','EDTO','Refile']);
+ assert.deepEqual(api.flightPlanSections(['3 PCT CONT 0020 00.12','REFILE RES 0000 00.00','REFER TO EDTO INFORMATION','EDTO FUEL 1234']),[]);
+ assert.deepEqual(api.flightPlanSections(['EDTO','REFILE','EDTO INFORMATION','REFILE FLIGHT PLAN','3 PCT CONTINGENCY']),['3% Contingency']);
+ assert.deepEqual(api.flightPlanSections(['edto   equal time point','Refile  FLT  Plan:']),['EDTO','Refile']);
+});
+
+test('FlightPlan has three ordered children at first primary-CFP headings alongside weather children',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({pages:12,atsIndex:8})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [page,title] of [[2,'3% CONTINGENCY ERA VALIDATION'],[3,'EDTO EQUAL TIME POINT 1'],[4,'REFILE FLT PLAN KAL123'],[6,'3% CONTINGENCY ERA VALIDATION'],[7,'EDTO EQUAL TIME POINT 2'],[9,'REFILE FLT PLAN KAL123']])doc.getPage(page).drawText(title,{x:30,y:720,size:10,font});
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const roots=await read.getOutline(),flight=roots.find(item=>item.title==='FlightPlan'),titles=['3% Contingency','EDTO','Refile'];
+  assert.deepEqual(flight.items.map(item=>item.title),titles);
+  const outline=await ui.api.readOutline(read);
+  for(const [i,page] of [2,3,4].entries())assert.equal(outline[titles[i]],page);
+  assert.deepEqual(roots.find(item=>item.title==='Weather Briefing').items.map(item=>item.title),['WindTemp','Cross Chart']);
+  assert.ok(!roots.some(item=>titles.includes(item.title)));
+  assert.equal(read.numPages,12);
+ });
+});
+
+test('Weather Briefing owns four ordered child bookmarks pointing to first matching charts',async()=>{
+ const doc=await lib.PDFDocument.load(await fixture({pages:12})),font=await doc.embedFont(lib.StandardFonts.Helvetica);
+ for(const [page,title] of [[6,'s i g w x 1'],[7,'a s c'],[8,'w i n t e m 2'],[9,'s i g w x 2'],[10,'a s c'],[11,'c r o s s']])doc.getPage(page).drawText(title,{x:30,y:760,size:10,font});
+ const ui=app();await ui.api.run(file(await doc.save({useObjectStreams:false})));
+ assert.ok(ui.blob,ui.elements.status.textContent);
+ await inspect(new Uint8Array(await ui.blob.arrayBuffer()),async read=>{
+  const roots=await read.getOutline(),weather=roots.find(item=>item.title==='Weather Briefing'),titles=['WindTemp','SIGWX','ASC(TURB)','Cross Chart'];
+  assert.deepEqual(weather.items.map(item=>item.title),titles);
+  assert.ok(!roots.some(item=>titles.includes(item.title)));
+  const outline=await ui.api.readOutline(read);
+  for(const [i,page] of [1,6,7,4].entries())assert.equal(outline[titles[i]],page);
+  assert.equal(read.numPages,12);
+ });
+ const {api}=app(),invalid=await lib.PDFDocument.create();invalid.addPage();
+ assert.throws(()=>api.addBookmarks(invalid,[{title:'Weather Briefing',page:0,children:[{title:'SIGWX',page:99}]}],lib),/북마크 페이지 범위/);
 });
 
 test('NOTAM bookmarks target the first heading, including repeats across extraction batches',async()=>{
