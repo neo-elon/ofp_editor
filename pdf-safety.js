@@ -117,20 +117,20 @@ async function verify(before,after,{document,edits=[],progress=()=>{},allowTextO
    // background only; dark text, colored content and all other edits stay protected.
    const underline=masked===2,headerUnderline=masked===4;
    if(masked&&!headerUnderline&&(!underline||oldPixels[pixel]!==newPixels[pixel])&&(underline?!(Math.min(r,g,b)>=180&&Math.max(r,g,b)-Math.min(r,g,b)<=4):(r!==255||g!==255||b!==255))){
-    if(allowTextOverlap&&(masked&1)&&!underline){if(oldPixels[pixel]!==newPixels[pixel])overlapPages.add(index+1);}
+    if(allowTextOverlap&&masked){if(oldPixels[pixel]!==newPixels[pixel])overlapPages.add(index+1);}
     else fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 겹쳐 쓰지 않고 다운로드를 중단합니다.');
    }
    if(oldPixels[pixel]===newPixels[pixel])continue;
    if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');
-   if(headerUnderline){
+   if(headerUnderline||(allowTextOverlap&&underline)){
     // Permit overlap, but only the blue underline (including antialiasing),
     // never arbitrary changes or erasure inside the small recorded rectangle.
     const original=[r,g,b],blue=[2,85,214];let channel=0;
     for(let c=1;c<3;c++)if(Math.abs(blue[c]-original[c])>Math.abs(blue[channel]-original[channel]))channel=c;
     const alpha=(y.data[offset+channel]-original[channel])/(blue[channel]-original[channel]);
-    if(!(alpha>0&&alpha<=1.02)||original.some((value,c)=>Math.abs(y.data[offset+c]-(value+alpha*(blue[c]-value)))>2))fail('검증 실패: NOTAM 1 헤더 밑줄 이외의 변경이 있습니다.');
+    if(!(alpha>0&&alpha<=1.02)||original.some((value,c)=>Math.abs(y.data[offset+c]-(value+alpha*(blue[c]-value)))>2))fail('검증 실패: 허용된 NOTAM 파란 밑줄 이외의 변경이 있습니다.');
    }
-   if(underline&&!(y.data[offset]<r&&y.data[offset+1]<=g&&y.data[offset+2]>=Math.min(b,214)-1&&y.data[offset+2]<=Math.max(b,214)+1&&y.data[offset+2]-y.data[offset]>b-r&&y.data[offset+2]-y.data[offset+1]>=b-g))fail('검증 실패: NOTAM 밑줄 색상 ('+[r,g,b]+' → '+Array.from(y.data.subarray(offset,offset+3))+').');
+   if(underline&&!allowTextOverlap&&!(y.data[offset]<r&&y.data[offset+1]<=g&&y.data[offset+2]>=Math.min(b,214)-1&&y.data[offset+2]<=Math.max(b,214)+1&&y.data[offset+2]-y.data[offset]>b-r&&y.data[offset+2]-y.data[offset+1]>=b-g))fail('검증 실패: NOTAM 밑줄 색상 ('+[r,g,b]+' → '+Array.from(y.data.subarray(offset,offset+3))+').');
   }
   if(!cached){digest=digest||await pixelDigest(x);if(digest)snapshots.set(index,{text:oldText,width,height,digest})}
   a.cleanup();b.cleanup();progress(index+1,before.numPages);
