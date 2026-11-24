@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.20.15</strong></span><span>최종 수정 <time datetime="2026-11-20">2026.11.20</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.25.01</strong></span><span>최종 수정 <time datetime="2026-11-25">2026.11.25</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -44,7 +44,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=02b183de9152105f"></script>
+<script src="pdf-safety.js?v=e48050dfef713cd7"></script>
 <script>
 (function(){
 'use strict';
@@ -146,7 +146,7 @@ async function discLayout(page,text,font){
  for(let size=10;size>=6;size-=.5)if(x+textWidth(font,text,size)+2<=page.view[2])return {x,y:row.y,size};
  abort('DISC FUEL DUE TO 줄 오른쪽에 DISC 값을 표시할 여백이 부족합니다.');
 }
-function routeLayout(annotations,route,result,font,width,height,isClear=()=>true){
+function routeLayout(annotations,route,result,font,width,height,isClear=()=>true,allowOverlap=false){
  const existing=annotations.filter(a=>a.subtype==='FreeText'&&a.contentsObj?.str.replace(/\s+/g,' ').trim()===route&&a.rect[3]>height-70);
  const candidates=existing.length?[{size:9,top:11.25,leading:10.5}]:[{size:10,top:17,leading:11.5},{size:9,top:11.25,leading:10.5}];
  // Prefer the largest safe text; progressively reduce both type size and leading.
@@ -169,6 +169,7 @@ function routeLayout(annotations,route,result,font,width,height,isClear=()=>true
    }))return {size,top,leading};
   }
  }
+ if(allowOverlap){for(const {size,top,leading} of candidates){const lines=wrap(route,font,size,width-50,result.match);if(lines.length<=4&&lines.every((line,i)=>{const y=height-top-leading*i;return y-size*.3-2>=0&&y+size+2<=height&&27+textWidth(font,line,size)+(result.match&&i===lines.length-1?5+textWidth(font,'(Checked)',size):0)<=width-23}))return {size,top,leading};}}
  abort('CFP Route를 상단 4줄에 배치할 여백이 부족합니다. 기존 텍스트와 주석을 가리지 않도록 처리를 중단했습니다.');
 }
 function drawRoute(page,route,result,font,lib,layout={size:10,top:17,leading:11.5}){
@@ -486,12 +487,12 @@ async function run(file){
   async function editable(index){const source=await read.getPage(index+1);return safety.recordPage(doc.getPage(pageMap[index]),index,edits,source.view)}
   const atsSource=await read.getPage(atsPage+1),atsAnnotations=await atsSource.getAnnotations();
   const clearRouteArea=await safety.whitespace(atsSource,document);
-  drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3],clearRouteArea));
+  drawRoute(await editable(atsPage),cfp.route,result,font,lib,routeLayout(atsAnnotations,cfp.route,result,font,atsSource.view[2],atsSource.view[3],clearRouteArea,true));
   const paxPages=Object.keys(texts).map(Number).filter(i=>texts[i].some(line=>PAX_HEADING.test(line)));
   if(paxPages.length>1)abort('PAX/CARGO RESERVATION 페이지가 여러 개여서 합계 표시 위치를 확인하지 못했습니다.');
   if(paxPages.length){
    const index=paxPages[0],source=await read.getPage(index+1),{text,...position}=await paxLayout(source,font),clear=await safety.whitespace(source,document),{x,y,size}=position;
-   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))abort('승객 합계 표시 위치에 기존 내용이 있어 처리를 중단했습니다.');
+   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))console.warn('승객 합계 표시 위치 겹침');
    (await editable(index)).drawText(text,{...position,font,color:lib.rgb(...BLUE)});
   }
   if(cfp.disc&&validPage(atsPage+2,read.numPages)){
@@ -500,7 +501,7 @@ async function run(file){
    if(discPage===undefined)abort('DISC FUEL DUE TO 문구가 있는 페이지를 확정하지 못했습니다.');
    const source=await read.getPage(discPage+1),text='DISC '+cfp.disc,position=await discLayout(source,text,font);
    const clear=await safety.whitespace(source,document),{x,y,size}=position;
-   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))abort('DISC 표시 위치에 기존 내용이 있어 처리를 중단했습니다.');
+   if(!clear([x-2,y-size*.3-2,x+textWidth(font,text,size)+2,y+size+2]))console.warn('DISC 표시 위치 겹침');
    (await editable(discPage)).drawText(text,{...position,font,color:lib.rgb(...BLUE)});
   }
   if(cfp.times&&sections['Weather Briefing']!==undefined){
@@ -523,12 +524,12 @@ async function run(file){
   addBookmarks(doc,bookmarks,lib);pct(80);
   const output=await doc.save({useObjectStreams:false,updateFieldAppearances:false}),name=cfp.plan+' '+cfp.flight+' '+cfp.origin+'-'+cfp.dest+' '+cfp.date+'.pdf';
   const outputTask=openPDF(pdfjs,output);tasks.push(outputTask);const outputRead=await outputTask.promise;
-  await safety.verify(originalRead,outputRead,{document,edits,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
+  const verification=await safety.verify(originalRead,outputRead,{document,edits,allowTextOverlap:true,progress:(n,total)=>{pct(80+Math.round(19*n/total));message('다운로드 전 원본/결과 대조: '+n+' / '+total+'페이지')}});
   await verifyBookmarks(outputRead,bookmarks,pageMap);
   await verifyNotamLinks(outputRead,navigation,pageMap);
   const url=URL.createObjectURL(new Blob([output],{type:'application/pdf'})),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);pct(100);
-  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+allBookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
+  message('완료: '+name+'\nRoute: '+(result.match?'일치 — (Checked) 추가':'불일치 — 빨간 밑줄 표시')+'\n북마크: '+allBookmarks.length+'개\n페이지 검증: '+originalRead.numPages+' → '+outputRead.numPages+(normalized?' (QPDF 정상화)':'')+(verification.overlapPages?.length?'\n주의: 기존 내용과 표시가 겹친 페이지 '+verification.overlapPages.join(', '):'')+'\n원본 파일은 변경되지 않았습니다.',result.match?'ok':'');
  }catch(e){progress.style.display='none';message('처리 중단: '+(e.message||String(e))+'\n검증을 통과하지 못해 다운로드하지 않습니다. 원본 PDF는 변경되지 않았습니다.','error');console.error(e)}finally{for(const task of tasks)try{await task.destroy()}catch(e){console.warn('PDF worker 정리 실패',e)}busy=false;choose.disabled=false}
 }
 })();
