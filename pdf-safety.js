@@ -72,9 +72,10 @@ async function pixelDigest(pixels){
  return new Uint8Array(await root.crypto.subtle.digest('SHA-256',pixels.data));
 }
 function sameDigest(a,b){return a.length===b.length&&a.every((value,index)=>value===b[index])}
-async function verify(before,after,{document,edits=[],progress=()=>{}}){
+async function verify(before,after,{document,edits=[],progress=()=>{},allowTextOverlap=false}){
  if(before.numPages!==after.numPages)fail('검증 실패: 원본 '+before.numPages+' / 결과 '+after.numPages+'페이지. 다운로드하지 않습니다.');
  let snapshots=sourceSnapshots.get(before);if(!snapshots){snapshots=new Map();sourceSnapshots.set(before,snapshots)}
+ const overlapPages=new Set();
  const editsByPage=new Map();for(const edit of edits){if(!editsByPage.has(edit.page))editsByPage.set(edit.page,[]);editsByPage.get(edit.page).push(edit)}
  for(let index=0;index<before.numPages;index++){
   const a=await before.getPage(index+1),b=await after.getPage(index+1),marks=editsByPage.get(index)||[];
@@ -115,7 +116,10 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
    // NOTAM title bars have a light gray background. Underlines may cover that
    // background only; dark text, colored content and all other edits stay protected.
    const underline=masked===2,headerUnderline=masked===4;
-   if(masked&&!headerUnderline&&(!underline||oldPixels[pixel]!==newPixels[pixel])&&(underline?!(Math.min(r,g,b)>=180&&Math.max(r,g,b)-Math.min(r,g,b)<=4):(r!==255||g!==255||b!==255)))fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 겹쳐 쓰지 않고 다운로드를 중단합니다.');
+   if(masked&&!headerUnderline&&(!underline||oldPixels[pixel]!==newPixels[pixel])&&(underline?!(Math.min(r,g,b)>=180&&Math.max(r,g,b)-Math.min(r,g,b)<=4):(r!==255||g!==255||b!==255))){
+    if(allowTextOverlap&&(masked&1)&&!underline){if(oldPixels[pixel]!==newPixels[pixel])overlapPages.add(index+1);}
+    else fail('검증 실패: '+(index+1)+'페이지 표시 위치에 기존 내용이 있습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 겹쳐 쓰지 않고 다운로드를 중단합니다.');
+   }
    if(oldPixels[pixel]===newPixels[pixel])continue;
    if(!masked)fail('검증 실패: '+(index+1)+'페이지의 허용된 표시 영역 밖 내용이 변경되었습니다 (픽셀 '+pixel%x.width+', '+Math.floor(pixel/x.width)+'). 다운로드하지 않습니다.');
    if(headerUnderline){
@@ -131,7 +135,7 @@ async function verify(before,after,{document,edits=[],progress=()=>{}}){
   if(!cached){digest=digest||await pixelDigest(x);if(digest)snapshots.set(index,{text:oldText,width,height,digest})}
   a.cleanup();b.cleanup();progress(index+1,before.numPages);
  }
- return {pages:before.numPages,checkedEdits:edits.length};
+ return {pages:before.numPages,checkedEdits:edits.length,overlapPages:[...overlapPages]};
 }
 function recordPage(page,index,edits,view){
  if(page.getRotation().angle!==0||view[0]!==0||view[1]!==0||view[2]!==page.getWidth()||view[3]!==page.getHeight())fail('표시 대상 페이지의 회전/CropBox를 지원하지 않습니다. 다운로드하지 않습니다.');
