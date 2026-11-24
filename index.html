@@ -27,7 +27,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </head>
 <body>
 <header><div class="wrap"><h1>OFP Editor</h1><p>Operational Flight Plan · PDF 자동 수정</p>
-<p class="release-info"><span>현재 버전 <strong>v2026.11.25.01</strong></span><span>최종 수정 <time datetime="2026-11-25">2026.11.25</time></span></p>
+<p class="release-info"><span>현재 버전 <strong>v2026.11.25.02</strong></span><span>최종 수정 <time datetime="2026-11-25">2026.11.25</time></span></p>
 </div></header>
 <main class="wrap"><section class="panel">
 <div class="drop" id="drop" tabindex="0" role="button"><strong>OFP PDF 파일 선택</strong><small>PDF를 선택하거나 이곳에 드래그하세요.</small><button id="choose" type="button">PDF 선택</button><input id="file" type="file" accept=".pdf,application/pdf"></div>
@@ -44,7 +44,7 @@ input[type=file]{display:none}#status{white-space:pre-wrap;line-height:1.65;font
 </section><p class="note">PDF는 서버로 업로드되지 않고 이 기기의 브라우저에서 처리됩니다. 원본은 변경하지 않습니다. 현재 버전은 처음 접속할 때 인터넷 연결이 필요하며, 오프라인 캐시 기능은 아직 포함되지 않았습니다. 회사 보안 규정을 확인하세요.</p></main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
-<script src="pdf-safety.js?v=e48050dfef713cd7"></script>
+<script src="pdf-safety.js?v=4608017edafa9f37"></script>
 <script>
 (function(){
 'use strict';
@@ -329,7 +329,7 @@ async function layoutNotamUnderlines(read,links,document){
    }
    // A light pixel can be the antialiased edge of a black glyph. Reject dark
    // dips below the row's background, while allowing white/gray title-bar edges.
-   // The user permits overlap only for NOTAM 1 header underlines.
+   // Prefer a clear row; permit overlap as a fallback for all NOTAM underlines.
    if(line.links.every(link=>link.notam1Header))chosen=viewport.convertToPdfPoint(0,(candidates[0]??Math.floor(baseRow))+.5)[1];
    for(const row of chosen===undefined?candidates:[]){
     let clear=row>=0&&row<canvas.height;
@@ -343,7 +343,7 @@ async function layoutNotamUnderlines(read,links,document){
     }
     if(clear){chosen=viewport.convertToPdfPoint(0,row+.5)[1];break}
    }
-   if(chosen===undefined)abort('NOTAM 링크 아래에 밑줄을 넣을 여백이 없습니다: '+(pageIndex+1)+'페이지');
+   if(chosen===undefined){const row=candidates.find(row=>row>=0&&row<canvas.height)??Math.max(0,Math.min(canvas.height-1,Math.floor(baseRow)));chosen=viewport.convertToPdfPoint(0,row+.5)[1];}
    for(const link of line.links)link.underlineY=chosen;
   }
   canvas.width=canvas.height=0;source.cleanup();
